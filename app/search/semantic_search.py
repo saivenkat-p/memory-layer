@@ -3,7 +3,8 @@ Real Neural Semantic Search Engine using local SentenceTransformers.
 
 Features embedding version/model awareness, stale embedding detection,
 robust validation, explicit error reporting, and re-indexing capabilities.
-Uses thread-safe lazy model caching to prevent singleton initialization errors.
+Model is loaded eagerly in __init__ and stored as a plain instance attribute
+so it survives Streamlit @st.cache_resource across hot-reloads.
 """
 
 import os
@@ -29,27 +30,6 @@ EXPECTED_DIMENSION = 384
 
 logger = logging.getLogger(__name__)
 
-# Global model cache to safely reuse SentenceTransformer instances
-_MODEL_CACHE: Dict[str, Any] = {}
-
-
-def get_sentence_transformer_model(model_name: str = ACTIVE_MODEL_NAME):
-    """
-    Safely loads and caches SentenceTransformer model weights.
-    Prevents duplicate memory loading and incomplete object states.
-    """
-    if model_name not in _MODEL_CACHE:
-        try:
-            import transformers
-            transformers.logging.set_verbosity_error()
-        except Exception:
-            pass
-
-        from sentence_transformers import SentenceTransformer
-        logger.info(f"Loading SentenceTransformer model '{model_name}' into memory...")
-        _MODEL_CACHE[model_name] = SentenceTransformer(model_name)
-    return _MODEL_CACHE[model_name]
-
 
 class NeuralEmbeddingEncoder:
     """
@@ -59,19 +39,30 @@ class NeuralEmbeddingEncoder:
 
     def __init__(self, model_name: str = ACTIVE_MODEL_NAME):
         self.model_name = model_name
+        self.model = None
+        self._init_model()
 
-    @property
-    def model(self):
-        """Lazy property returning cached SentenceTransformer instance."""
-        return get_sentence_transformer_model(self.model_name)
+    def _init_model(self):
+        if self.model is None:
+            try:
+                import transformers
+                transformers.logging.set_verbosity_error()
+            except Exception:
+                pass
+            from sentence_transformers import SentenceTransformer
+            logger.info(f"Loading SentenceTransformer model '{self.model_name}' into memory...")
+            self.model = SentenceTransformer(self.model_name)
 
     def encode(self, text: str) -> List[float]:
         """Encodes text string into a 384-dimensional normalized float list."""
         if not text or not text.strip():
             return [0.0] * EXPECTED_DIMENSION
+
+        if self.model is None:
+            self._init_model()
+
         try:
-            model = self.model
-            vec = model.encode(text, convert_to_numpy=True, show_progress_bar=False)
+            vec = self.model.encode(text, convert_to_numpy=True, show_progress_bar=False)
             norm = float(np.linalg.norm(vec))
             if norm > 0:
                 vec = vec / norm

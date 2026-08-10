@@ -1,11 +1,18 @@
 """
-Personal AI Memory Layer - Streamlit Web Application MVP with Hybrid Search.
+Personal AI Memory Layer - Streamlit Web Application MVP with Neural Hybrid Search & Debug Mode.
 
 Main entry point integrating Conversation Parsing, Database Storage,
-Hybrid Search Engine (Keyword + Vector Embeddings), Source Context Viewer, and Ask My Memory Assistant.
+Neural Hybrid Search Engine (SentenceTransformers), Source Context Viewer, and Ask My Memory Assistant.
 """
 
 import os
+import sys
+
+# Suppress progress bars and HF warnings before importing sentence-transformers
+os.environ["TQDM_DISABLE"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import streamlit as st
 from app.repositories.database import Database
 from app.repositories.conversation_repository import ConversationRepository
@@ -13,6 +20,9 @@ from app.parsers.factory import parse_conversation_file
 from app.parsers.base import ParsingError
 from app.search.hybrid_search import HybridSearchEngine
 from app.ai.memory_assistant import AskMyMemoryAssistant
+
+# Enable development debug mode to inspect scores in UI
+DEBUG_SEMANTIC_SEARCH = True
 
 # Configure Streamlit page layout and theme
 st.set_page_config(
@@ -69,6 +79,15 @@ st.markdown("""
         font-weight: 600;
         font-size: 0.85rem;
     }
+    .debug-box {
+        background: rgba(30, 41, 59, 0.5);
+        border: 1px dashed #64748B;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-family: monospace;
+        font-size: 0.85rem;
+        margin-top: 6px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -76,7 +95,8 @@ st.markdown("""
 @st.cache_resource
 def get_services():
     """Initializes singletons for Database, Repository, HybridSearchEngine, and Assistant."""
-    db = Database(os.path.join("data", "memory.db"))
+    db_path = os.path.join("data", "memory.db")
+    db = Database(db_path)
     repo = ConversationRepository(db)
     search_engine = HybridSearchEngine(repo)
     assistant = AskMyMemoryAssistant(search_engine)
@@ -105,29 +125,32 @@ nav_option = st.sidebar.radio(
 )
 
 
-# Helper function to seed sample data
+# Helper function to seed sample data with deduplication
 def seed_demo_data():
     sample_files = [
         ("data/sample_chatgpt.json", "sample_chatgpt.json"),
         ("data/sample_chat.txt", "sample_chat.txt"),
     ]
     added = 0
+    existing_titles = [c.title for c in repo.list_conversations()]
+
     for path, name in sample_files:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
                 content = f.read()
             try:
                 conv = parse_conversation_file(content, name)
-                if name.endswith("json"):
-                    conv.category = "Startup Idea"
-                    conv.tags = ["IoT", "Water", "Automation"]
-                    conv.description = "Smart water tank monitoring project"
-                else:
-                    conv.category = "Learning"
-                    conv.tags = ["Quantum", "Python", "Physics"]
-                    conv.description = "Qiskit quantum circuit notes"
-                repo.save_conversation(conv)
-                added += 1
+                if conv.title not in existing_titles:
+                    if name.endswith("json"):
+                        conv.category = "Startup Idea"
+                        conv.tags = ["IoT", "Water", "Automation"]
+                        conv.description = "Smart water tank monitoring project"
+                    else:
+                        conv.category = "Learning"
+                        conv.tags = ["Quantum", "Python", "Physics"]
+                        conv.description = "Qiskit quantum circuit notes"
+                    repo.save_conversation(conv)
+                    added += 1
             except Exception:
                 pass
     return added
@@ -155,7 +178,7 @@ if nav_option == "📊 Dashboard":
         st.info("👋 Welcome! Your memory layer is currently empty.")
         if st.button("🚀 Load Sample Conversations (Demo Data)", type="primary"):
             added = seed_demo_data()
-            st.success(f"Successfully loaded {added} sample conversations! Refreshing...")
+            st.success(f"Successfully loaded sample conversations! Refreshing...")
             st.rerun()
     else:
         col_left, col_right = st.columns([2, 1])
@@ -219,7 +242,7 @@ elif nav_option == "📥 Import Conversation":
 
             if st.button("💾 Save Conversation to Memory Layer", type="primary"):
                 repo.save_conversation(parsed_conv)
-                st.toast("Conversation saved successfully with vector embeddings!", icon="🎉")
+                st.toast("Conversation saved successfully with neural vector embeddings!", icon="🎉")
                 st.success("Saved! You can now search for topics discussed in this conversation.")
 
         except ParsingError as e:
@@ -266,25 +289,23 @@ elif nav_option == "🔍 Search Memory":
     st.markdown('<div class="main-header">Hybrid Search Memory</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-header">Search by keywords OR describe what you remember in your own words.</div>', unsafe_allow_html=True)
 
-    # Example prompt chips
     st.write("💡 **Try searching:**")
-    cols = st.columns(4)
+    cols = st.columns(3)
     example_queries = [
-        "water tank",
-        "automatically stop motor when tank is full",
-        "climbing mountain prototype",
-        "avoiding going upstairs to check the water"
+        "Which idea did I have about not needing to physically inspect something?",
+        "I had an idea to prevent a household resource from being wasted because I didn't know its level.",
+        "That home automation idea about checking levels remotely",
     ]
     selected_example = ""
 
     for idx, eq in enumerate(example_queries):
-        if cols[idx].button(f"🔍 {eq[:22]}...", key=f"chip_{idx}"):
+        if cols[idx].button(f"🔍 {eq[:30]}...", key=f"chip_{idx}"):
             selected_example = eq
 
     query_input = st.text_input(
         "Search Query",
         value=selected_example,
-        placeholder="Describe what you discussed (e.g., avoiding going upstairs to check the water)...",
+        placeholder="Describe what you discussed...",
     )
 
     col_f1, col_f2 = st.columns(2)
@@ -301,31 +322,41 @@ elif nav_option == "🔍 Search Memory":
 
         st.subheader(f"Found {len(results)} Matching Result(s)")
 
-        for res in results:
-            with st.container():
-                st.markdown(f"### 📄 {res.conversation_title} <span class='score-badge'>Match Score: {res.score}%</span>", unsafe_allow_html=True)
-                st.caption(f"Source: {res.source} | Role: {res.matched_role.title()} | Message Index: {res.msg_index}")
+        if not results:
+            st.warning("⚠️ No sufficiently relevant memory found for this search description.")
+        else:
+            for res in results:
+                with st.container():
+                    st.markdown(f"### 📄 {res.conversation_title} <span class='score-badge'>Match Score: {res.score}%</span>", unsafe_allow_html=True)
+                    st.caption(f"Source: {res.source} | Role: {res.matched_role.title()} | Message Index: {res.msg_index}")
 
-                st.markdown(f"> **Snippet:** ...{res.snippet}...")
+                    st.markdown(f"> **Snippet:** ...{res.snippet}...")
 
-                # Feature 5: Source Context Expander
-                with st.expander("🔍 View Original Source Context (Surrounding Messages)"):
-                    context = search_engine.keyword_engine.get_source_context(res.conversation_id, res.msg_index, window=2)
+                    if DEBUG_SEMANTIC_SEARCH:
+                        sem_tuples = search_engine.semantic_engine.search_semantic(query_input, limit=50)
+                        raw_sem_score = dict(sem_tuples).get(res.message_id, 0.0)
+                        st.markdown(
+                            f'<div class="debug-box">🐛 <b>DEBUG SCORES:</b> Raw Neural Semantic Cosine: <b>{raw_sem_score:.4f}</b> | Combined Hybrid: <b>{res.score}%</b></div>',
+                            unsafe_allow_html=True
+                        )
 
-                    if context["previous_messages"]:
-                        st.markdown("**Previous Messages:**")
-                        for pmsg in context["previous_messages"]:
-                            st.markdown(f"*[{pmsg.role.title()}]*: {pmsg.content}")
+                    with st.expander("🔍 View Original Source Context (Surrounding Messages)"):
+                        context = search_engine.keyword_engine.get_source_context(res.conversation_id, res.msg_index, window=2)
 
-                    st.markdown("**Matched Message (Source of Truth):**")
-                    st.markdown(f'<div class="context-highlight"><b>[{res.matched_role.title()}]</b>: {res.matched_content}</div>', unsafe_allow_html=True)
+                        if context["previous_messages"]:
+                            st.markdown("**Previous Messages:**")
+                            for pmsg in context["previous_messages"]:
+                                st.markdown(f"*[{pmsg.role.title()}]*: {pmsg.content}")
 
-                    if context["following_messages"]:
-                        st.markdown("**Following Messages:**")
-                        for fmsg in context["following_messages"]:
-                            st.markdown(f"*[{fmsg.role.title()}]*: {fmsg.content}")
+                        st.markdown("**Matched Message (Source of Truth):**")
+                        st.markdown(f'<div class="context-highlight"><b>[{res.matched_role.title()}]</b>: {res.matched_content}</div>', unsafe_allow_html=True)
 
-                st.divider()
+                        if context["following_messages"]:
+                            st.markdown("**Following Messages:**")
+                            for fmsg in context["following_messages"]:
+                                st.markdown(f"*[{fmsg.role.title()}]*: {fmsg.content}")
+
+                    st.divider()
 
 
 # -----------------------------------------------------------------------------
@@ -337,7 +368,7 @@ elif nav_option == "🤖 Ask My Memory":
 
     ask_query = st.text_input(
         "Ask a Question",
-        placeholder="e.g. What startup ideas did I discuss? Or where did I talk about Qiskit?",
+        placeholder="e.g. Which idea did I have about not needing to physically inspect something?",
     )
 
     if st.button("🤖 Generate Grounded Answer", type="primary") or ask_query:
@@ -356,7 +387,7 @@ elif nav_option == "🤖 Ask My Memory":
                         st.write(f"**Category:** {src['category']}")
                         st.markdown(f"> *{src['content_snippet']}*")
             else:
-                st.warning("⚠️ No Stored Information Found")
+                st.warning("⚠️ No sufficiently relevant memory found")
                 st.write(answer.summary)
 
 
@@ -405,14 +436,20 @@ elif nav_option == "⚙️ Data & Settings":
     db_path = os.path.abspath(os.path.join("data", "memory.db"))
     st.write(f"**Database Location:** `{db_path}`")
 
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("🚀 Load Sample Demo Conversations"):
             added = seed_demo_data()
-            st.success(f"Added {added} sample conversations with vector embeddings.")
+            st.success(f"Added sample conversations with vector embeddings.")
             st.rerun()
 
     with c2:
+        if st.button("🔄 Re-index All Embeddings"):
+            stats = search_engine.semantic_engine.reindex_all_embeddings()
+            st.success(f"Re-indexed {stats['embeddings_reindexed']} embeddings across {stats['conversations_found']} conversations.")
+            st.rerun()
+
+    with c3:
         if st.button("⚠️ Clear Entire Memory Database", type="secondary"):
             convs = repo.list_conversations()
             for c in convs:

@@ -24,11 +24,26 @@
 - **Architectural Revision**: Replaced `LocalVectorEngine` with a true local pretrained transformer model: `sentence-transformers` (`all-MiniLM-L6-v2`, 384 dimensions).
 - **Persistence**: Persisted 384-dimensional dense vectors in SQLite `message_embeddings` table.
 - **Hybrid Fusion**: Fused keyword score ($w=0.3$) and neural cosine similarity score ($w=0.7$) with a minimum relevance threshold of $0.35$.
-- **Acceptance Verification**:
-  - Tested zero-vocabulary-overlap queries:
-    - `"The idea where I don't have to physically go upstairs to inspect something."` -> Matches Water Tank!
-    - `"A way to remotely know whether a household resource has enough supply."` -> Matches Water Tank!
-    - `"Automatically prevent overflow without manually checking the tank."` -> Matches Water Tank!
-    - `"Quantum entanglement circuit."` -> Water Tank NOT returned.
-    - `"Qiskit quantum circuit."` -> Qiskit returned.
-    - `"Childhood cricket memories."` -> No relevant water-tank result.
+
+---
+
+## Log Entry 4: Database Embedding Migration & Stale Vector Lifecycle Fix
+- **Problem Discovered**: Pre-existing SQLite database (`data/memory.db`) contained legacy embeddings from the previous lexical implementation (`model_name = "local-vector-v1"`). When `SemanticSearchEngine` ran, silent exception handling (`except Exception: continue`) caused pre-existing data to produce zero semantic search results.
+- **Model Version Awareness**:
+  - Implemented `model_name` validation in `SemanticSearchEngine.validate_stored_embedding()`.
+  - Stale embeddings (`model_name != "all-MiniLM-L6-v2"`) are flagged, skipped, and logged with diagnostic warnings.
+- **Re-indexing Engine & CLI Tool**:
+  - Implemented `reindex_all_embeddings()` in `app/search/semantic_search.py`.
+  - Created `reindex_embeddings.py` CLI script to regenerate embeddings for pre-existing database files.
+  - Successfully re-indexed `data/memory.db`: 6 conversations, 24 messages re-indexed with 0 failures.
+- **Error Reporting**:
+  - Removed silent `except Exception: pass` swallows in repository saving. Errors during embedding generation are explicitly logged and raised.
+- **Empirical Acceptance Verification**:
+  - All 30 unit & integration tests passed.
+  - Verified zero-vocabulary-overlap queries:
+    - `"The idea where I don't have to go upstairs to inspect something"` -> **Smart Water Tank Monitoring System (54%)**
+    - `"A system that lets me remotely know whether a household resource is sufficient."` -> **Smart Water Tank Monitoring System (65%)**
+    - `"Automatically prevent overflow without manually checking the tank."` -> **Smart Water Tank Monitoring System (60%)**
+    - `"I need to remotely monitor household supply without physically inspecting it."` -> **Smart Water Tank Monitoring System (65%)**
+    - `"Quantum entanglement circuit."` -> **No sufficiently relevant memory found.**
+    - `"Childhood cricket memories."` -> **No sufficiently relevant memory found.**

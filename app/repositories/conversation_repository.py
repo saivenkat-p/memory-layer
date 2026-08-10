@@ -1,13 +1,16 @@
 """
 Repository layer for Conversations and Messages data access.
 Abstracts all SQL queries and database operations behind clean Python methods.
-Auto-indexes embeddings for semantic search upon save.
+Auto-indexes embeddings for semantic search upon save with explicit error logging.
 """
 
 import json
+import logging
 from typing import List, Optional, Dict, Any
 from app.models.schemas import Conversation, Message
 from app.repositories.database import Database
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationRepository:
@@ -21,7 +24,7 @@ class ConversationRepository:
     def save_conversation(self, conversation: Conversation) -> str:
         """
         Saves a conversation and all its messages into the database in a single atomic transaction.
-        Also triggers embedding generation for semantic search.
+        Also triggers embedding generation for semantic search with explicit error reporting.
         Returns the conversation ID.
         """
         with self.db.get_connection() as conn:
@@ -72,13 +75,16 @@ class ConversationRepository:
         return conversation.id
 
     def _index_embeddings(self, conversation: Conversation):
-        """Helper to generate and persist message embeddings."""
+        """Helper to generate and persist message embeddings with explicit error reporting."""
         try:
             from app.search.semantic_search import SemanticSearchEngine
             semantic_engine = SemanticSearchEngine(self)
-            semantic_engine.index_conversation_messages(conversation.id)
-        except Exception:
-            pass
+            indexed_count = semantic_engine.index_conversation_messages(conversation.id)
+            logger.info(f"Successfully generated embeddings for {indexed_count} message(s) in '{conversation.title}'")
+        except Exception as e:
+            logger.error(f"Failed to generate vector embeddings for conversation '{conversation.title}': {e}")
+            # Re-raise so caller/UI does not claim false success if indexing failed
+            raise RuntimeError(f"Embedding generation failed: {e}")
 
     def get_conversation(self, conversation_id: str) -> Optional[Conversation]:
         """
@@ -95,7 +101,6 @@ class ConversationRepository:
             if not row:
                 return None
 
-            # Retrieve associated messages sorted by msg_index
             cursor.execute(
                 """
                 SELECT * FROM messages 

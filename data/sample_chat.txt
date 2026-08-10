@@ -1,0 +1,4 @@
+User: Can you explain how Qiskit represents quantum circuits?
+Assistant: Qiskit represents quantum circuits using the `QuantumCircuit` class. You specify the number of qubits and classical bits. For example: `qc = QuantumCircuit(2, 2)` creates a circuit with 2 qubits and 2 classical bits.
+User: How do I apply a Hadamard gate and measure the state?
+Assistant: You apply a Hadamard gate with `qc.h(0)` to put qubit 0 into superposition. Then perform measurement using `qc.measure([0, 1], [0, 1])` to record the state into classical registers.

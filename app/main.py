@@ -13,6 +13,35 @@ os.environ["TQDM_DISABLE"] = "1"
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+# Fix Windows Streamlit sys.stderr.flush OSError [Errno 22] bug during tqdm output
+class SafeStreamWrapper:
+    def __init__(self, original_stream):
+        self._original = original_stream
+
+    def write(self, s):
+        try:
+            return self._original.write(s)
+        except Exception:
+            pass
+
+    def flush(self):
+        try:
+            if hasattr(self._original, "flush"):
+                return self._original.flush()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+if sys.stderr is not None and not getattr(sys.stderr, "_is_safe_wrapper", False):
+    sys.stderr = SafeStreamWrapper(sys.stderr)
+    sys.stderr._is_safe_wrapper = True
+
+if sys.stdout is not None and not getattr(sys.stdout, "_is_safe_wrapper", False):
+    sys.stdout = SafeStreamWrapper(sys.stdout)
+    sys.stdout._is_safe_wrapper = True
+
 import streamlit as st
 from app.repositories.database import Database
 from app.repositories.conversation_repository import ConversationRepository
@@ -103,7 +132,14 @@ def get_services():
     return repo, search_engine, assistant
 
 
-repo, search_engine, assistant = get_services()
+try:
+    repo, search_engine, assistant = get_services()
+    if not hasattr(search_engine.semantic_engine.encoder, "model") or search_engine.semantic_engine.encoder.model is None:
+        st.cache_resource.clear()
+        repo, search_engine, assistant = get_services()
+except Exception:
+    st.cache_resource.clear()
+    repo, search_engine, assistant = get_services()
 
 
 # Sidebar Navigation

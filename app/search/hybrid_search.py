@@ -1,8 +1,8 @@
 """
 Hybrid Search Engine module.
 
-Fuses Lexical/Keyword Search and Semantic Embeddings Vector Search using
-Score Fusion Ranking and Semantic Noise Filtering.
+Combines Keyword/Lexical Search and Local Neural Semantic Vector Search
+using configurable weighted score fusion and relevance thresholding.
 """
 
 from typing import List, Optional, Dict, Tuple
@@ -13,23 +13,29 @@ from app.search.semantic_search import SemanticSearchEngine
 
 class HybridSearchEngine:
     """
-    Combines Keyword Search and Semantic Vector Search into a unified, ranked Hybrid Search pipeline.
+    Fuses Lexical Keyword Search and Local Neural Vector Search into a unified hybrid ranking pipeline.
     """
 
     def __init__(
         self,
         repo: Optional[ConversationRepository] = None,
-        alpha: float = 0.6,
+        semantic_weight: float = 0.7,
+        keyword_weight: float = 0.3,
+        min_relevance_threshold: float = 0.35,
     ):
         """
         Args:
             repo: ConversationRepository instance.
-            alpha: Semantic weight factor (0.0 = pure keyword, 1.0 = pure semantic). Default 0.6.
+            semantic_weight: Weight for neural vector similarity (default 0.7).
+            keyword_weight: Weight for normalized keyword match (default 0.3).
+            min_relevance_threshold: Threshold below which results are excluded (default 0.35).
         """
         self.repo = repo or ConversationRepository()
         self.keyword_engine = SearchEngine(self.repo)
         self.semantic_engine = SemanticSearchEngine(self.repo)
-        self.alpha = alpha
+        self.semantic_weight = semantic_weight
+        self.keyword_weight = keyword_weight
+        self.min_relevance_threshold = min_relevance_threshold
 
     def search(
         self,
@@ -40,7 +46,7 @@ class HybridSearchEngine:
         limit: int = 50,
     ) -> List[SearchResult]:
         """
-        Executes hybrid search combining lexical matching and vector semantic similarity.
+        Executes Hybrid Search combining Lexical Matching and Neural Embedding Similarity.
         """
         if not query or not query.strip():
             return []
@@ -50,14 +56,14 @@ class HybridSearchEngine:
         if not words:
             words = [w.lower() for w in clean_query.split() if len(w) > 1]
 
-        # 1. Execute Lexical Keyword Search
+        # 1. Lexical Keyword Search Candidate Pool
         keyword_results = self.keyword_engine.search(
             clean_query, category=category, source=source, tag=tag, limit=limit * 2
         )
         keyword_map: Dict[str, SearchResult] = {res.message_id: res for res in keyword_results}
         max_kw_score = max([res.score for res in keyword_results], default=1)
 
-        # 2. Execute Semantic Vector Search
+        # 2. Neural Vector Semantic Search Candidate Pool
         semantic_tuples = self.semantic_engine.search_semantic(clean_query, limit=limit * 2)
         semantic_map: Dict[str, float] = {msg_id: score for msg_id, score in semantic_tuples}
 
@@ -69,7 +75,6 @@ class HybridSearchEngine:
         for msg_id in all_msg_ids:
             res = keyword_map.get(msg_id)
 
-            # If not in keyword results, retrieve message from repo to construct SearchResult
             if not res:
                 convs = self.repo.list_conversations(limit=200)
                 found_msg = None
@@ -102,32 +107,29 @@ class HybridSearchEngine:
                     score=0,
                 )
 
-            # Calculate Normalized Keyword Score [0, 1]
+            # Apply Category / Source / Tag filters to semantic candidates as well
+            if category and res.category != category:
+                continue
+            if source and res.source != source:
+                continue
+            if tag and tag not in res.tags:
+                continue
+
+            # Normalized Keyword Score [0.0, 1.0]
             kw_raw = res.score
             kw_norm = kw_raw / float(max_kw_score) if max_kw_score > 0 else 0.0
 
-            # Calculate Semantic Cosine Score [0, 1]
+            # Neural Cosine Semantic Score [0.0, 1.0]
             sem_score = semantic_map.get(msg_id, 0.0)
 
-            # --- FALSE POSITIVE MITIGATION RULE ---
-            # If user query has multiple words (e.g. "climbing mountain prototype") and only 1 keyword matches,
-            # but semantic score is zero/near-zero because the core query concepts ("climbing mountain") do not match,
-            # discard or heavily penalize the match.
-            matched_kw_count = sum(1 for w in words if w in res.matched_content.lower() or w in res.conversation_title.lower())
-            
-            if len(words) >= 2 and matched_kw_count < len(words) and sem_score < 0.2:
-                # Incidental match penalty
-                kw_norm *= 0.1
-                sem_score *= 0.1
+            # Combined Hybrid Score Formula
+            final_score = (self.semantic_weight * sem_score) + (self.keyword_weight * kw_norm)
 
-            # Compute Hybrid Fused Score
-            hybrid_score = (self.alpha * sem_score) + ((1.0 - self.alpha) * kw_norm)
-
-            if hybrid_score > 0.05:
-                # Update result score as percentage integer for clear UI display
-                res.score = int(round(hybrid_score * 100))
+            # Apply Relevance Thresholding
+            if final_score >= self.min_relevance_threshold:
+                res.score = int(round(final_score * 100))
                 hybrid_results.append(res)
 
-        # Sort by Hybrid Score DESC
+        # Sort by Final Hybrid Score DESC
         hybrid_results.sort(key=lambda r: r.score, reverse=True)
         return hybrid_results[:limit]

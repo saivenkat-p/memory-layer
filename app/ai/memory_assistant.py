@@ -1,9 +1,10 @@
 """
-Ask My Memory Assistant module using Hybrid Search.
+Ask My Memory Assistant module using Neural Hybrid Search.
 
 Feature 6 (Ask My Memory):
-Retrieves stored conversation content using Hybrid Search (Keyword + Semantic Vectors)
+Retrieves stored conversation content using Neural Hybrid Search (Keyword + SentenceTransformers)
 and synthesizes a grounded answer with clear distinction between SOURCE INFORMATION and AI SUMMARY.
+Returns no-result warning when relevance threshold is not met.
 """
 
 from dataclasses import dataclass, field
@@ -43,7 +44,7 @@ class AskMyMemoryAssistant:
 
     def ask(self, query: str, limit: int = 5) -> MemoryAnswer:
         """
-        Processes a natural language query against stored memory using Hybrid Search.
+        Processes a natural language query against stored memory using Neural Hybrid Search.
         """
         if not query or not query.strip():
             return MemoryAnswer(
@@ -60,7 +61,7 @@ class AskMyMemoryAssistant:
             return MemoryAnswer(
                 query=clean_query,
                 found=False,
-                summary=f"No relevant information found in your stored conversations for: '{clean_query}'.",
+                summary=f"No sufficiently relevant memory found in your stored conversations for: '{clean_query}'.",
                 sources=[],
             )
 

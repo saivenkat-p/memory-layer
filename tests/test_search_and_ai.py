@@ -16,7 +16,7 @@ class TestSearchAndAI(unittest.TestCase):
         self.db = Database(":memory:")
         self.repo = ConversationRepository(self.db)
         self.search_engine = SearchEngine(self.repo)
-        self.assistant = AskMyMemoryAssistant(self.search_engine)
+        self.assistant = AskMyMemoryAssistant()
 
         # Seed test data
         c1 = Conversation(
@@ -60,7 +60,6 @@ class TestSearchAndAI(unittest.TestCase):
         self.assertEqual(results[0].conversation_title, "Quantum Computing with Qiskit")
 
     def test_source_context_retrieval(self):
-        # Search for message index 1 in conversation c1
         convs = self.repo.list_conversations()
         c1_id = [c.id for c in convs if "Water" in c.title][0]
 
@@ -81,7 +80,7 @@ class TestSearchAndAI(unittest.TestCase):
     def test_ask_my_memory_no_results(self):
         answer = self.assistant.ask("Where did I discuss government certificates?")
         self.assertFalse(answer.found)
-        self.assertIn("No relevant information found", answer.summary)
+        self.assertIn("No sufficiently relevant memory found", answer.summary)
 
 
 if __name__ == "__main__":

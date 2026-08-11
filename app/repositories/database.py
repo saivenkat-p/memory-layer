@@ -72,7 +72,31 @@ class Database:
                 content TEXT NOT NULL,
                 msg_index INTEGER NOT NULL,
                 timestamp TEXT,
+                source_conversation_id TEXT,
+                source_message_id TEXT,
                 FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
+            );
+        """)
+
+        # Migration helper for existing DBs missing provenance columns
+        cursor.execute("PRAGMA table_info(messages);")
+        existing_cols = [row["name"] for row in cursor.fetchall()]
+        if "source_conversation_id" not in existing_cols:
+            cursor.execute("ALTER TABLE messages ADD COLUMN source_conversation_id TEXT;")
+        if "source_message_id" not in existing_cols:
+            cursor.execute("ALTER TABLE messages ADD COLUMN source_message_id TEXT;")
+
+        # Conversation Relationships table for Topic Continuation (Version 3)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS conversation_relationships (
+                id TEXT PRIMARY KEY,
+                parent_conversation_id TEXT NOT NULL,
+                child_conversation_id TEXT NOT NULL,
+                relationship_type TEXT NOT NULL DEFAULT 'topic_continuation',
+                topic TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (parent_conversation_id) REFERENCES conversations (id) ON DELETE CASCADE,
+                FOREIGN KEY (child_conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
             );
         """)
 
@@ -96,6 +120,16 @@ class Database:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_conversations_imported_at 
             ON conversations(imported_at DESC);
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conv_rel_parent 
+            ON conversation_relationships(parent_conversation_id);
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conv_rel_child 
+            ON conversation_relationships(child_conversation_id);
         """)
 
         conn.commit()

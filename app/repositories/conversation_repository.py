@@ -99,13 +99,13 @@ class ConversationRepository:
                 ),
             )
 
-            # Insert messages
+            # Insert messages with optional provenance references
             for msg in conversation.messages:
                 cursor.execute(
                     """
                     INSERT OR REPLACE INTO messages
-                    (id, conversation_id, role, content, msg_index, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (id, conversation_id, role, content, msg_index, timestamp, source_conversation_id, source_message_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         msg.id,
@@ -114,6 +114,8 @@ class ConversationRepository:
                         msg.content,
                         msg.index,
                         msg.timestamp,
+                        msg.source_conversation_id,
+                        msg.source_message_id,
                     ),
                 )
 
@@ -168,6 +170,8 @@ class ConversationRepository:
                     content=m["content"],
                     index=m["msg_index"],
                     timestamp=m["timestamp"],
+                    source_conversation_id=m["source_conversation_id"] if "source_conversation_id" in m.keys() else None,
+                    source_message_id=m["source_message_id"] if "source_message_id" in m.keys() else None,
                 )
                 for m in msg_rows
             ]
@@ -289,4 +293,95 @@ class ConversationRepository:
                 "total_conversations": total_conversations,
                 "total_messages": total_messages,
                 "sources": sources,
+            }
+
+    def add_relationship(
+        self,
+        parent_id: str,
+        child_id: str,
+        topic: str,
+        rel_type: str = "topic_continuation",
+    ) -> str:
+        """
+        Stores a parent-child conversation relationship (Version 3 Feature 2: Continue Topic).
+        Returns the created relationship ID.
+        """
+        import uuid
+        from datetime import datetime, timezone
+
+        rel_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc).isoformat()
+
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO conversation_relationships
+                (id, parent_conversation_id, child_conversation_id, relationship_type, topic, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (rel_id, parent_id, child_id, rel_type, topic, created_at),
+            )
+            conn.commit()
+        return rel_id
+
+    def get_relationships(self, conversation_id: str) -> Dict[str, Any]:
+        """
+        Returns relationship metadata for a conversation.
+        Includes parent conversation info (if this is a child continuation)
+        and children conversations info (if topics were extracted from this conversation).
+        """
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Find parent (if child)
+            cursor.execute(
+                """
+                SELECT r.*, c.title as parent_title 
+                FROM conversation_relationships r
+                JOIN conversations c ON r.parent_conversation_id = c.id
+                WHERE r.child_conversation_id = ?
+                """,
+                (conversation_id,),
+            )
+            parent_row = cursor.fetchone()
+
+            # Find children (if parent)
+            cursor.execute(
+                """
+                SELECT r.*, c.title as child_title 
+                FROM conversation_relationships r
+                JOIN conversations c ON r.child_conversation_id = c.id
+                WHERE r.parent_conversation_id = ?
+                """,
+                (conversation_id,),
+            )
+            children_rows = cursor.fetchall()
+
+            parent_info = (
+                {
+                    "relationship_id": parent_row["id"],
+                    "parent_id": parent_row["parent_conversation_id"],
+                    "parent_title": parent_row["parent_title"],
+                    "topic": parent_row["topic"],
+                    "created_at": parent_row["created_at"],
+                }
+                if parent_row
+                else None
+            )
+
+            children_info = [
+                {
+                    "relationship_id": r["id"],
+                    "child_id": r["child_conversation_id"],
+                    "child_title": r["child_title"],
+                    "topic": r["topic"],
+                    "created_at": r["created_at"],
+                }
+                for r in children_rows
+            ]
+
+            return {
+                "parent": parent_info,
+                "children": children_info,
             }

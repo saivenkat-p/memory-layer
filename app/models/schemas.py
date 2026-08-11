@@ -24,6 +24,8 @@ class Message:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     conversation_id: Optional[str] = None
     timestamp: Optional[str] = None
+    source_conversation_id: Optional[str] = None
+    source_message_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -33,6 +35,8 @@ class Message:
             "content": self.content,
             "index": self.index,
             "timestamp": self.timestamp,
+            "source_conversation_id": self.source_conversation_id,
+            "source_message_id": self.source_message_id,
         }
 
 

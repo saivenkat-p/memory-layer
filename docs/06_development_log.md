@@ -64,3 +64,24 @@
   - Added real-time progress indicators (`327 / 1,248 conversations`) and import summary report cards.
 - **Automated Tests**:
   - Created `tests/test_bulk_import.py` (4 new tests, 34 total tests passing cleanly).
+
+---
+
+## Log Entry 6: Version 3 — 🔍 Find Here & 🌿 Continue Topic
+- **Problem Solved**:
+  - *Find Here*: Users know a topic was discussed inside a specific long conversation, but scrolling hundreds of messages is painful. Searching must be ephemeral without polluting database history.
+  - *Continue Topic*: Users want to extract a single topic from a multi-topic conversation and create a focused conversation.
+- **Feature 1: 🔍 Find Here**:
+  - Implemented `FindHereEngine` in `app/search/find_here.py`.
+  - Scopes hybrid (keyword + neural vector) search strictly to `conversation_id = ?`.
+  - Ephemeral guarantee: Search queries execute in-memory and are never inserted into database messages or persistent vector embeddings.
+  - UI: Integrated match snippet cards and **Jump to Match** context display in Streamlit.
+- **Feature 2: 🌿 Continue Topic**:
+  - Implemented `TopicExtractionEngine` in `app/services/topic_extractor.py`.
+  - Scores target messages using local `all-MiniLM-L6-v2` neural similarity, groups user/assistant pairs, and maintains strict chronological sequence ($80 \to 84 \to 91$).
+  - Message provenance: Derived continuation messages record `source_conversation_id` and `source_message_id` references to avoid redundant embedding generation.
+  - Added `conversation_relationships` table to `app/repositories/database.py` (`id`, `parent_conversation_id`, `child_conversation_id`, `relationship_type`, `topic`, `created_at`).
+  - UI: Integrated interactive context preview and **Create Focused Continuation Chat** workflow.
+- **Automated Tests**:
+  - Created `tests/test_version3_features.py` (6 new tests).
+  - Executed complete regression suite: **40 / 40 tests PASSED**.

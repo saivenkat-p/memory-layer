@@ -119,31 +119,33 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
-
-
 from app.services.bulk_import import BulkImportEngine
+from app.search.find_here import FindHereEngine
+from app.services.topic_extractor import TopicExtractionEngine
 
 
 @st.cache_resource
 def get_services():
-    """Initializes singletons for Database, Repository, HybridSearchEngine, Assistant, and BulkImportEngine."""
+    """Initializes singletons for Database, Repository, HybridSearchEngine, Assistant, BulkImportEngine, FindHereEngine, and TopicExtractionEngine."""
     db_path = os.path.join("data", "memory.db")
     db = Database(db_path)
     repo = ConversationRepository(db)
     search_engine = HybridSearchEngine(repo)
     assistant = AskMyMemoryAssistant(search_engine)
     bulk_engine = BulkImportEngine(repo)
-    return repo, search_engine, assistant, bulk_engine
+    find_here_engine = FindHereEngine(repo)
+    topic_extractor = TopicExtractionEngine(repo)
+    return repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor
 
 
 try:
-    repo, search_engine, assistant, bulk_engine = get_services()
+    repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor = get_services()
     if not hasattr(search_engine.semantic_engine.encoder, "model") or search_engine.semantic_engine.encoder.model is None:
         st.cache_resource.clear()
-        repo, search_engine, assistant, bulk_engine = get_services()
+        repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor = get_services()
 except Exception:
     st.cache_resource.clear()
-    repo, search_engine, assistant, bulk_engine = get_services()
+    repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor = get_services()
 
 
 # Sidebar Navigation
@@ -353,7 +355,7 @@ elif nav_option == "📥 Import History":
 
 
 # -----------------------------------------------------------------------------
-# VIEW 3: CONVERSATIONS LIST
+# VIEW 3: CONVERSATIONS LIST (WITH FIND HERE & CONTINUE TOPIC)
 # -----------------------------------------------------------------------------
 elif nav_option == "💬 Conversations":
     st.markdown('<div class="main-header">Stored Conversations</div>', unsafe_allow_html=True)
@@ -361,7 +363,7 @@ elif nav_option == "💬 Conversations":
     convs = repo.list_conversations(limit=100)
 
     if not convs:
-        st.info("No conversations stored yet. Use the 'Import Conversation' tab or load sample data from Dashboard.")
+        st.info("No conversations stored yet. Use the 'Import History' tab or load sample data from Dashboard.")
     else:
         st.write(f"Showing {len(convs)} conversation(s):")
 
@@ -373,16 +375,98 @@ elif nav_option == "💬 Conversations":
                     st.write(f"**Category:** {conv.category or 'None'} | **Tags:** {', '.join(conv.tags) if conv.tags else 'None'}")
                     if conv.description:
                         st.write(f"**Description:** {conv.description}")
+                    
+                    # Display Parent / Child Continuation Relationships (Version 3)
+                    rel_data = repo.get_relationships(conv.id)
+                    if rel_data["parent"]:
+                        p = rel_data["parent"]
+                        st.info(f"🌿 **Derived Continuation**: Extracted from **'{p['parent_title']}'** on topic: *'{p['topic']}'*")
+                    if rel_data["children"]:
+                        for ch in rel_data["children"]:
+                            st.caption(f"🌿 **Derived Topic Chat**: '{ch['child_title']}' (Topic: '{ch['topic']}')")
+
                 with c2:
                     if st.button("🗑️ Delete", key=f"del_{conv.id}", type="secondary"):
                         repo.delete_conversation(conv.id)
                         st.rerun()
 
                 st.divider()
-                st.markdown("### Conversation History")
+
+                # Feature 1: 🔍 FIND HERE (In-Conversation Temporary Search)
+                with st.expander("🔍 Find in this conversation", expanded=False):
+                    find_query = st.text_input(
+                        "What are you looking for inside this conversation?",
+                        key=f"find_input_{conv.id}",
+                        placeholder="e.g. where did we discuss Version 2?",
+                    )
+                    if find_query:
+                        find_results = find_here_engine.search_in_conversation(conv.id, find_query)
+                        if not find_results:
+                            st.warning(f"No matches found for '{find_query}' inside this conversation.")
+                        else:
+                            st.success(f"Found {len(find_results)} match(es) in this conversation:")
+                            for m_idx, match in enumerate(find_results, start=1):
+                                st.markdown(
+                                    f"**Match #{m_idx}** | Message #{match.msg_index} ({match.matched_role.title()}) — Score: **{match.score}%**"
+                                )
+                                st.markdown(f'<div class="debug-box">"{match.snippet}"</div>', unsafe_allow_html=True)
+                                if st.button(f"📍 Jump to Match #{m_idx}", key=f"jump_{conv.id}_{match.message_id}"):
+                                    st.session_state[f"jump_msg_{conv.id}"] = match.msg_index
+
+                # Display Jump Context Window if user clicked Jump to Match
+                jump_target = st.session_state.get(f"jump_msg_{conv.id}")
+                if jump_target is not None:
+                    st.info(f"📍 **Focusing Message #{jump_target} Window:**")
+                    ctx = search_engine.keyword_engine.get_source_context(conv.id, jump_target, window=2)
+                    for msg in ctx["window_messages"]:
+                        is_target = (msg.index == jump_target)
+                        style = "border: 2px solid #3B82F6; background: rgba(59,130,246,0.15);" if is_target else ""
+                        role_class = "chat-user" if msg.role == "user" else "chat-assistant"
+                        st.markdown(f'<div class="{role_class}" style="{style}"><b>Msg #{msg.index} {msg.role.title()}:</b> {msg.content}</div>', unsafe_allow_html=True)
+
+                st.divider()
+
+                # Feature 2: 🌿 CONTINUE TOPIC (Context Extraction & Isolation)
+                with st.expander("🌿 Continue Topic into a Focused Chat", expanded=False):
+                    topic_input = st.text_input(
+                        "What topic do you want to extract and continue?",
+                        key=f"topic_input_{conv.id}",
+                        placeholder="e.g. Personal AI Memory Layer",
+                    )
+                    if st.button("🔍 Find Relevant Context", key=f"find_ctx_btn_{conv.id}"):
+                        if topic_input:
+                            preview = topic_extractor.extract_topic_context(conv.id, topic_input)
+                            st.session_state[f"preview_{conv.id}"] = preview
+
+                    preview = st.session_state.get(f"preview_{conv.id}")
+                    if preview and preview.parent_conversation_id == conv.id:
+                        st.subheader(f"🌿 Topic Preview: '{preview.topic}'")
+                        st.write(f"✓ Found **{preview.total_context_messages} relevant message(s)** ({preview.direct_match_count} direct matches).")
+                        
+                        selected_msg_ids = []
+                        for sel_msg in preview.selected_messages:
+                            label = f"Msg #{sel_msg.original_index} ({sel_msg.role.title()}): {sel_msg.content[:100]}..."
+                            check_val = st.checkbox(label, value=True, key=f"cb_{conv.id}_{sel_msg.message_id}")
+                            if check_val:
+                                selected_msg_ids.append(sel_msg.message_id)
+
+                        if st.button("🌿 Create Focused Continuation Chat", key=f"create_chat_{conv.id}", type="primary"):
+                            if selected_msg_ids:
+                                new_chat = topic_extractor.create_continued_conversation(
+                                    parent_conversation_id=conv.id,
+                                    topic=preview.topic,
+                                    selected_message_ids=selected_msg_ids,
+                                )
+                                st.toast(f"Created focused chat '{new_chat.title}'!", icon="🎉")
+                                st.success(f"Created derived conversation **'{new_chat.title}'** with {new_chat.message_count} messages!")
+                                del st.session_state[f"preview_{conv.id}"]
+                                st.rerun()
+
+                st.divider()
+                st.markdown("### Full Conversation History")
                 for msg in conv.messages:
                     role_class = "chat-user" if msg.role == "user" else "chat-assistant"
-                    st.markdown(f'<div class="{role_class}"><b>{msg.role.title()}:</b> {msg.content}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="{role_class}"><b>Msg #{msg.index} {msg.role.title()}:</b> {msg.content}</div>', unsafe_allow_html=True)
 
 
 # -----------------------------------------------------------------------------

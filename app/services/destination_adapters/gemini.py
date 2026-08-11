@@ -1,17 +1,20 @@
 """
-Gemini (Google AI API) Destination Adapter (Milestone V5B: Live AI Integration).
+Gemini (Google AI Interactions API) Destination Adapter (Milestone V5B: Live AI Integration).
 
-Transforms a PortableContextPackage into native contents array for official Google Gemini API:
-1. Clearly distinguishes historical reference context in system_instruction.
-2. Preserves ordered multi-turn structure of package.messages (mapping assistant to 'model' role).
-3. Transmits ONLY the user-selected package messages (never full SQLite DB).
-4. Supports environment variable (GEMINI_API_KEY) or UI configuration without logging secrets.
+Migrates from legacy generateContent to official Google Interactions API standard:
+1. Endpoint: POST https://generativelanguage.googleapis.com/v1beta/interactions?key={API_KEY}
+2. Model: gemini-3.6-flash
+3. Flat payload: {"model": "gemini-3.6-flash", "system_instruction": "...", "input": "..."}
+4. Response parsing: extracts text from output_text, steps array, output, or fallback.
+5. Transmits ONLY user-selected package messages (never full SQLite DB).
+6. Supports environment variable (GEMINI_API_KEY) or UI configuration without logging secrets.
 """
 
 import os
 import json
 import logging
 import urllib.request
+import urllib.parse
 import urllib.error
 from typing import Dict, Any, Optional, List
 
@@ -20,13 +23,13 @@ from app.services.destination_adapters.base import DestinationAdapter, Destinati
 
 logger = logging.getLogger(__name__)
 
-GEMINI_API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
-DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
+DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
 
 
 class GeminiAdapter(DestinationAdapter):
     """
-    Concrete Destination Adapter for official Google Gemini API.
+    Concrete Destination Adapter for official Google Gemini Interactions API (gemini-3.6-flash).
     """
 
     def __init__(self, mock_executor: Optional[Any] = None):
@@ -70,10 +73,14 @@ class GeminiAdapter(DestinationAdapter):
                 error_code="EMPTY_MESSAGES"
             )
 
-        # Check API Key
-        config_dict = config or {}
-        api_key = config_dict.get("api_key") or os.environ.get("GEMINI_API_KEY")
-        if not api_key or not str(api_key).strip():
+        # Check API Key safely
+        config_dict = config if isinstance(config, dict) else {}
+        raw_key = config_dict.get("api_key")
+        if not raw_key or not isinstance(raw_key, str) or not raw_key.strip():
+            raw_key = os.environ.get("GEMINI_API_KEY", "")
+
+        api_key = raw_key.strip()
+        if not api_key:
             return DestinationResult(
                 status="AUTH_REQUIRED",
                 provider=self.provider_name,
@@ -81,24 +88,34 @@ class GeminiAdapter(DestinationAdapter):
                 error_code="MISSING_API_KEY"
             )
 
+        # Guard against query/topic string accidentally passed as API key
+        if any(c in api_key for c in (" ", "\n", "\r", "\t")) or (package and (api_key == package.topic or api_key == package.topic.strip())):
+            return DestinationResult(
+                status="AUTH_REQUIRED",
+                provider=self.provider_name,
+                message="Invalid GEMINI_API_KEY format. API key cannot contain spaces, newlines, or query text.",
+                error_code="INVALID_API_KEY_FORMAT"
+            )
+
         return DestinationResult(
             status="SUCCESS",
             provider=self.provider_name,
-            message="Package and credentials validated for Google Gemini API transmission."
+            message="Package and credentials validated for Google Gemini Interactions API transmission."
         )
 
     def prepare(self, package: PortableContextPackage) -> Dict[str, Any]:
         """
-        Transforms PortableContextPackage v1.0 into native Gemini generateContent payload:
-        - System instruction tags historical context.
-        - Preserves ordered multi-turn structure (mapping 'assistant' role to 'model').
+        Transforms PortableContextPackage v1.0 into flat Gemini Interactions API payload:
+        - model: "gemini-3.6-flash"
+        - system_instruction: tags historical context.
+        - input: formatted prompt containing ordered messages.
         """
         if not package or not package.messages:
             raise ValueError("Invalid package for Gemini preparation.")
 
         conv_titles = ", ".join(c.get("title", "") for c in package.source_conversations)
 
-        system_instruction_text = (
+        system_instruction = (
             "You are an AI assistant. The user is providing historical reference context retrieved from their "
             "Personal AI Memory Layer across past conversations.\n"
             f"Topic / Goal: {package.topic}\n"
@@ -107,52 +124,80 @@ class GeminiAdapter(DestinationAdapter):
             "not as direct prior outputs in this current active session. Use this context to assist the user with their current objective."
         )
 
-        contents: List[Dict[str, Any]] = []
+        input_parts = []
         for msg in package.messages:
-            role = "user" if msg.get("role") == "user" else "model"
+            role_tag = f"[{msg.get('role', 'user').title()}]"
             prov_info = f"[Historical Context - Provider: {msg.get('provider', 'Unknown')} | Conv: {msg.get('conversation_title', '')}]"
-            msg_text = f"{prov_info}\n{msg.get('content', '')}"
-            contents.append({
-                "role": role,
-                "parts": [{"text": msg_text}]
-            })
+            input_parts.append(f"{role_tag} {prov_info}\n{msg.get('content', '').strip()}")
+
+        input_text = "\n\n".join(input_parts)
 
         return {
-            "system_instruction": {
-                "parts": [{"text": system_instruction_text}]
-            },
-            "contents": contents,
+            "model": DEFAULT_GEMINI_MODEL,
+            "system_instruction": system_instruction,
+            "input": input_text,
         }
+
+    def _extract_response_text(self, resp_dict: Dict[str, Any]) -> str:
+        """Helper to extract response text from Interactions API payload or fallbacks."""
+        if "output_text" in resp_dict and isinstance(resp_dict["output_text"], str):
+            return resp_dict["output_text"]
+
+        if "steps" in resp_dict and isinstance(resp_dict["steps"], list) and len(resp_dict["steps"]) > 0:
+            step_outputs = []
+            for step in resp_dict["steps"]:
+                if isinstance(step, dict):
+                    if "output_text" in step:
+                        step_outputs.append(str(step["output_text"]))
+                    elif "output" in step:
+                        step_outputs.append(str(step["output"]))
+                    elif "text" in step:
+                        step_outputs.append(str(step["text"]))
+            if step_outputs:
+                return "\n".join(step_outputs)
+
+        if "output" in resp_dict and isinstance(resp_dict["output"], str):
+            return resp_dict["output"]
+
+        # Legacy candidate fallback if provider proxies generateContent format
+        if "candidates" in resp_dict and isinstance(resp_dict["candidates"], list) and len(resp_dict["candidates"]) > 0:
+            try:
+                return resp_dict["candidates"][0]["content"]["parts"][0]["text"]
+            except Exception:
+                pass
+
+        return "Received response from Gemini Interactions API."
 
     def execute(self, package: PortableContextPackage, config: Optional[Dict[str, Any]] = None) -> DestinationResult:
         """
-        Executes transmission to Google Gemini API.
+        Executes transmission to Google Gemini Interactions API.
         """
         val_res = self.validate(package, config)
         if val_res.status != "SUCCESS":
             return val_res
 
-        config_dict = config or {}
-        api_key = config_dict.get("api_key") or os.environ.get("GEMINI_API_KEY")
+        config_dict = config if isinstance(config, dict) else {}
+        raw_key = config_dict.get("api_key")
+        if not raw_key or not isinstance(raw_key, str) or not raw_key.strip():
+            raw_key = os.environ.get("GEMINI_API_KEY", "")
+
+        api_key = raw_key.strip()
+        encoded_key = urllib.parse.quote(api_key)
 
         payload_dict = self.prepare(package)
-        target_url = f"{GEMINI_API_ENDPOINT}?key={api_key.strip()}"
+        target_url = f"{GEMINI_API_ENDPOINT}?key={encoded_key}"
 
         # Mock Execution Path (Used during automated unit tests)
         if self.mock_executor:
             try:
                 status_code, resp_data = self.mock_executor(target_url, api_key, payload_dict)
                 if status_code == 200:
-                    model_text = ""
-                    try:
-                        model_text = resp_data["candidates"][0]["content"]["parts"][0]["text"]
-                    except Exception:
-                        model_text = "Received valid response from Gemini API."
+                    model_text = self._extract_response_text(resp_data)
                     return DestinationResult(
                         status="API_RESPONSE",
                         provider=self.provider_name,
-                        message="Received response from Google Gemini API (gemini-1.5-flash).",
-                        external_id=resp_data.get("responseId", "gemini-resp-id"),
+                        message=f"Received response from Google Gemini API ({DEFAULT_GEMINI_MODEL}).",
+                        external_id=resp_data.get("id", resp_data.get("responseId", "gemini-resp-id")),
                         response_payload={"model": DEFAULT_GEMINI_MODEL, "response_text": model_text, "raw": resp_data}
                     )
                 else:
@@ -183,18 +228,13 @@ class GeminiAdapter(DestinationAdapter):
             with urllib.request.urlopen(req, timeout=30) as resp:
                 resp_bytes = resp.read()
                 resp_dict = json.loads(resp_bytes.decode("utf-8"))
-
-                model_text = ""
-                try:
-                    model_text = resp_dict["candidates"][0]["content"]["parts"][0]["text"]
-                except Exception:
-                    model_text = "Received response from Gemini API."
+                model_text = self._extract_response_text(resp_dict)
 
                 return DestinationResult(
                     status="API_RESPONSE",
                     provider=self.provider_name,
-                    message="Received response from Google Gemini API (gemini-1.5-flash).",
-                    external_id=resp_dict.get("responseId"),
+                    message=f"Received response from Google Gemini API ({DEFAULT_GEMINI_MODEL}).",
+                    external_id=resp_dict.get("id", resp_dict.get("responseId")),
                     response_payload={"model": DEFAULT_GEMINI_MODEL, "response_text": model_text, "raw": resp_dict}
                 )
 

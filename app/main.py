@@ -633,8 +633,10 @@ elif nav_option == "🧩 Compose Context":
                     st.success("🔒 **Local First**: 100% offline. Zero external network calls.")
                 elif destination_choice == "ChatGPT (OpenAI API)":
                     st.info("⚡ **Live API Adapter**: Transmits selected context to OpenAI Chat API.")
+                elif destination_choice == "Gemini (Google AI API)":
+                    st.info("⚡ **Live API Adapter**: Transmits selected context to Google Gemini API.")
                 else:
-                    st.warning("⚠️ **Planned Adapter**: Use Local Export or ChatGPT (OpenAI API).")
+                    st.warning("⚠️ **Planned Adapter**: Use Local Export, ChatGPT, or Gemini.")
 
             # Local Export Path
             if destination_choice == "Local Export (JSON & Plain Text)":
@@ -690,12 +692,14 @@ elif nav_option == "🧩 Compose Context":
                 if st.button("🔒 Review & Prepare Transfer to ChatGPT", key="review_chatgpt_btn"):
                     pkg = local_exporter.prepare_context(active_preview)
                     st.session_state["v5b_pending_package"] = pkg
+                    st.session_state["v5b_pending_dest"] = "ChatGPT (OpenAI API)"
                     st.session_state["v5b_awaiting_confirm"] = True
 
                 awaiting_confirm = st.session_state.get("v5b_awaiting_confirm", False)
                 pending_pkg = st.session_state.get("v5b_pending_package")
+                pending_dest = st.session_state.get("v5b_pending_dest")
 
-                if awaiting_confirm and pending_pkg:
+                if awaiting_confirm and pending_pkg and pending_dest == "ChatGPT (OpenAI API)":
                     st.warning("🔒 **Transfer Confirmation & Privacy Gate**")
                     with st.expander("📋 Review Transfer Summary", expanded=True):
                         st.markdown(f"**Destination:** `ChatGPT (OpenAI API)`")
@@ -710,6 +714,7 @@ elif nav_option == "🧩 Compose Context":
                             if st.button("❌ Cancel Transfer", key="cancel_transfer_btn"):
                                 st.session_state["v5b_awaiting_confirm"] = False
                                 st.session_state["v5b_pending_package"] = None
+                                st.session_state["v5b_pending_dest"] = None
                                 st.rerun()
                         with conf_c2:
                             if st.button("🚀 Confirm & Send to ChatGPT", type="primary", key="confirm_send_chatgpt_btn"):
@@ -721,7 +726,7 @@ elif nav_option == "🧩 Compose Context":
                                 st.rerun()
 
                 transfer_result = st.session_state.get("v5b_transfer_result")
-                if transfer_result:
+                if transfer_result and transfer_result.provider == "ChatGPT (OpenAI API)":
                     st.divider()
                     if transfer_result.status == "API_RESPONSE":
                         st.success(f"🎉 **{transfer_result.message}**")
@@ -733,7 +738,65 @@ elif nav_option == "🧩 Compose Context":
                     else:
                         st.error(f"❌ **Transfer Failed [{transfer_result.status}]**: {transfer_result.message}")
 
-            # Stub Destinations (Gemini / Claude)
+            # Gemini (Google AI API) Path
+            elif destination_choice == "Gemini (Google AI API)":
+                gemini_key_input = st.text_input(
+                    "Google Gemini API Key (or set GEMINI_API_KEY environment variable)",
+                    type="password",
+                    key="gemini_api_key_input",
+                    help="Your API key is never hardcoded, logged, or saved to disk."
+                )
+
+                if st.button("🔒 Review & Prepare Transfer to Gemini", key="review_gemini_btn"):
+                    pkg = local_exporter.prepare_context(active_preview)
+                    st.session_state["v5b_pending_package"] = pkg
+                    st.session_state["v5b_pending_dest"] = "Gemini (Google AI API)"
+                    st.session_state["v5b_awaiting_confirm"] = True
+
+                awaiting_confirm = st.session_state.get("v5b_awaiting_confirm", False)
+                pending_pkg = st.session_state.get("v5b_pending_package")
+                pending_dest = st.session_state.get("v5b_pending_dest")
+
+                if awaiting_confirm and pending_pkg and pending_dest == "Gemini (Google AI API)":
+                    st.warning("🔒 **Transfer Confirmation & Privacy Gate**")
+                    with st.expander("📋 Review Transfer Summary", expanded=True):
+                        st.markdown(f"**Destination:** `Gemini (Google AI API)`")
+                        st.markdown(f"**Topic:** `{pending_pkg.topic}`")
+                        st.markdown(f"**Selected Messages:** `{len(pending_pkg.messages)}`")
+                        st.markdown(f"**Source Conversations:** `{len(pending_pkg.source_conversations)}`")
+                        st.markdown(f"**Source Providers:** `{pending_pkg.source_providers}`")
+                        st.error("⚠️ **Data Leaving Local Environment:**\nOnly the selected messages and topic context will be transmitted to Google Gemini API under your API key.")
+
+                        conf_c1, conf_c2 = st.columns(2)
+                        with conf_c1:
+                            if st.button("❌ Cancel Transfer", key="cancel_transfer_gemini_btn"):
+                                st.session_state["v5b_awaiting_confirm"] = False
+                                st.session_state["v5b_pending_package"] = None
+                                st.session_state["v5b_pending_dest"] = None
+                                st.rerun()
+                        with conf_c2:
+                            if st.button("🚀 Confirm & Send to Gemini", type="primary", key="confirm_send_gemini_btn"):
+                                adapter = dest_registry.get_adapter("Gemini (Google AI API)")
+                                config = {"api_key": gemini_key_input} if gemini_key_input else {}
+                                result = adapter.execute(pending_pkg, config=config)
+                                st.session_state["v5b_transfer_result"] = result
+                                st.session_state["v5b_awaiting_confirm"] = False
+                                st.rerun()
+
+                transfer_result = st.session_state.get("v5b_transfer_result")
+                if transfer_result and transfer_result.provider == "Gemini (Google AI API)":
+                    st.divider()
+                    if transfer_result.status == "API_RESPONSE":
+                        st.success(f"🎉 **{transfer_result.message}**")
+                        if transfer_result.response_payload and "response_text" in transfer_result.response_payload:
+                            st.markdown("### ♊ Gemini Response:")
+                            st.info(transfer_result.response_payload["response_text"])
+                    elif transfer_result.status == "AUTH_REQUIRED":
+                        st.error(f"🔑 **Authentication Required**: {transfer_result.message}")
+                    else:
+                        st.error(f"❌ **Transfer Failed [{transfer_result.status}]**: {transfer_result.message}")
+
+            # Stub Destinations (Claude)
             else:
                 adapter = dest_registry.get_adapter(destination_choice)
                 if adapter:

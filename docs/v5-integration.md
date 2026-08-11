@@ -97,28 +97,22 @@ The `PortableContextPackage` dataclass ([`app/models/schemas.py`](file:///c:/Use
 - **`base.py`**: Defines `DestinationResult` schema and `DestinationAdapter` ABC (`provider_name`, `is_supported`, `validate()`, `prepare()`, `execute()`).
 - **`local.py`**: `LocalExportAdapter` wrapping offline package generation.
 - **`chatgpt.py`**: `ChatGPTAdapter` transforming `PortableContextPackage` into native multi-turn messages array for official OpenAI Chat API.
-- **`stubs.py`**: `GeminiAdapter` & `ClaudeAdapter` stubs returning `status="NOT_SUPPORTED"`.
+- **`gemini.py`**: `GeminiAdapter` transforming `PortableContextPackage` into native multi-turn contents array for official Google Gemini API (`gemini-1.5-flash`).
+- **`stubs.py`**: `ClaudeAdapter` stub returning `status="NOT_SUPPORTED"`.
 - **`registry.py`**: `DestinationRegistry` factory (`get_adapter(provider_name)`).
 
-### 3.2 ChatGPT (OpenAI API) Payload Transformation & Historical Context Tagging
-`ChatGPTAdapter.prepare(package)` transforms ordered `package.messages` into native multi-turn payload:
-1. **System Context Message**:
-   ```python
-   {
-       "role": "system",
-       "content": "You are an AI assistant. The user is providing historical reference context retrieved from their Personal AI Memory Layer...\nIMPORTANT: Treat the following user and assistant messages as historical reference material, not as direct prior outputs in this current active session."
-   }
-   ```
-2. **Ordered Message Mapping**: Maps each `package.messages` item to `user` or `assistant` role, prepending provider and conversation origin tags.
+### 3.2 Provider Payload Transformations & Historical Context Tagging
+- **`ChatGPTAdapter.prepare(package)`**: Transforms `package.messages` into `messages` array (`role: "user"` / `role: "assistant"`) with `system` instruction.
+- **`GeminiAdapter.prepare(package)`**: Transforms `package.messages` into `contents` array (`role: "user"` / `role: "model"`) with `system_instruction`.
 
 ### 3.3 Explicit Privacy Confirmation Gate (Streamlit UI)
-Before any external API transmission occurs, Streamlit renders a mandatory confirmation dialog displaying destination, topic, message count, source conversations, source providers, and explicit notice: *"Data leaving local environment: Only the selected messages will be transmitted to OpenAI API."*
+Before any external API transmission occurs, Streamlit renders a mandatory confirmation dialog displaying destination, topic, message count, source conversations, source providers, and explicit notice of data leaving local machine.
 
 ---
 
-## 4. Test Suite Summary (80/80 Passed)
+## 4. Test Suite Summary (81/81 Passed)
 
 - **Baseline Tests (V1–V5A)**: 67 / 67 Passed.
-- **V5B Destination Adapter Tests**: 13 / 13 Passed (TEST 68 to TEST 80 in [`tests/test_version5b_adapters.py`](file:///c:/Users/saive/OneDrive/Desktop/personal%20-memory-layer/tests/test_version5b_adapters.py)).
-- **Total Suite**: **80 / 80 Passed** (`Ran 80 tests in 91.602s — OK`).
+- **V5B Destination Adapter Tests**: 14 / 14 Passed (TEST 68 to TEST 81 in [`tests/test_version5b_adapters.py`](file:///c:/Users/saive/OneDrive/Desktop/personal%20-memory-layer/tests/test_version5b_adapters.py)).
+- **Total Suite**: **81 / 81 Passed** (`Ran 81 tests in 239.509s — OK`).
 - **Isolated Live Tests**: [`tests/integration/test_live_chatgpt_api.py`](file:///c:/Users/saive/OneDrive/Desktop/personal%20-memory-layer/tests/integration/test_live_chatgpt_api.py) (Opt-in via `RUN_LIVE_API_TESTS=1`).

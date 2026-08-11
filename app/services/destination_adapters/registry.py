@@ -4,7 +4,7 @@ Destination Registry module (Milestone V5B: Live AI Integration).
 Factory registry that instantiates and manages available V5 destination adapters:
 - Local Export Adapter
 - ChatGPT (OpenAI API) Adapter
-- Gemini Adapter (Stub)
+- Gemini (Google AI API) Adapter
 - Claude Adapter (Stub)
 """
 
@@ -14,7 +14,8 @@ from typing import Dict, List, Optional, Type, Any
 from app.services.destination_adapters.base import DestinationAdapter
 from app.services.destination_adapters.local import LocalExportAdapter
 from app.services.destination_adapters.chatgpt import ChatGPTAdapter
-from app.services.destination_adapters.stubs import GeminiAdapter, ClaudeAdapter
+from app.services.destination_adapters.gemini import GeminiAdapter
+from app.services.destination_adapters.stubs import ClaudeAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +25,11 @@ class DestinationRegistry:
     Registry factory for destination adapters.
     """
 
-    def __init__(self, mock_chatgpt_executor: Optional[Any] = None):
+    def __init__(self, mock_chatgpt_executor: Optional[Any] = None, mock_gemini_executor: Optional[Any] = None):
         self.adapters: Dict[str, DestinationAdapter] = {
             "Local Export (JSON & Plain Text)": LocalExportAdapter(),
             "ChatGPT (OpenAI API)": ChatGPTAdapter(mock_executor=mock_chatgpt_executor),
-            "Gemini (Google AI API)": GeminiAdapter(),
+            "Gemini (Google AI API)": GeminiAdapter(mock_executor=mock_gemini_executor),
             "Claude (Anthropic API)": ClaudeAdapter(),
         }
 

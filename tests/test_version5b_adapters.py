@@ -16,7 +16,8 @@ from app.services.export_engine import LocalExportDestination
 from app.services.destination_adapters.base import DestinationAdapter, DestinationResult
 from app.services.destination_adapters.local import LocalExportAdapter
 from app.services.destination_adapters.chatgpt import ChatGPTAdapter
-from app.services.destination_adapters.stubs import GeminiAdapter, ClaudeAdapter
+from app.services.destination_adapters.gemini import GeminiAdapter
+from app.services.destination_adapters.stubs import ClaudeAdapter
 from app.services.destination_adapters.registry import DestinationRegistry
 
 
@@ -46,8 +47,23 @@ def mock_error_openai_executor(url, api_key, payload_dict):
     return 429, {"error": {"message": "Rate limit exceeded for model gpt-4o-mini", "type": "rate_limit_error"}}
 
 
+def mock_successful_gemini_executor(url, api_key, payload_dict):
+    """Mock HTTP executor simulating a successful Google Gemini Interactions API response."""
+    return 200, {
+        "id": "gemini-resp-mock-999",
+        "model": "gemini-3.6-flash",
+        "output_text": "Gemini insight based on your historical Memory Layer context.",
+        "steps": [{"output_text": "Gemini insight based on your historical Memory Layer context."}]
+    }
+
+
+def mock_error_gemini_executor(url, api_key, payload_dict):
+    """Mock HTTP executor simulating a Google Gemini API error response."""
+    return 400, {"error": {"message": "API key not valid. Please pass a valid API key.", "code": 400}}
+
+
 class TestVersion5BAdapters(unittest.TestCase):
-    """Test suite for V5B Destination Adapters (TEST 68 to TEST 80)."""
+    """Test suite for V5B Destination Adapters."""
 
     def setUp(self):
         self.test_db_path = f"test_v5b_{os.getpid()}.db"
@@ -113,9 +129,12 @@ class TestVersion5BAdapters(unittest.TestCase):
 
         self.local_adapter = LocalExportAdapter(self.exporter)
         self.chatgpt_adapter = ChatGPTAdapter(mock_executor=mock_successful_openai_executor)
-        self.gemini_adapter = GeminiAdapter()
+        self.gemini_adapter = GeminiAdapter(mock_executor=mock_successful_gemini_executor)
         self.claude_adapter = ClaudeAdapter()
-        self.registry = DestinationRegistry(mock_chatgpt_executor=mock_successful_openai_executor)
+        self.registry = DestinationRegistry(
+            mock_chatgpt_executor=mock_successful_openai_executor,
+            mock_gemini_executor=mock_successful_gemini_executor
+        )
 
     def tearDown(self):
         if hasattr(self.db, "_memory_conn") and self.db._memory_conn:
@@ -141,12 +160,15 @@ class TestVersion5BAdapters(unittest.TestCase):
                 pass
 
     def test_68_package_accepted_by_adapters(self):
-        """TEST 68: PortableContextPackage accepted by LocalExportAdapter and ChatGPTAdapter validation."""
+        """TEST 68: PortableContextPackage accepted by LocalExportAdapter, ChatGPTAdapter, and GeminiAdapter validation."""
         local_res = self.local_adapter.validate(self.package)
         self.assertEqual(local_res.status, "SUCCESS")
 
         chatgpt_res = self.chatgpt_adapter.validate(self.package, config={"api_key": "sk-test-key"})
         self.assertEqual(chatgpt_res.status, "SUCCESS")
+
+        gemini_res = self.gemini_adapter.validate(self.package, config={"api_key": "gemini-test-key"})
+        self.assertEqual(gemini_res.status, "SUCCESS")
 
     def test_69_invalid_package_rejected(self):
         """TEST 69: Invalid/empty package rejected by adapter validation."""
@@ -155,6 +177,9 @@ class TestVersion5BAdapters(unittest.TestCase):
 
         chatgpt_res = self.chatgpt_adapter.validate(None, config={"api_key": "sk-test-key"})
         self.assertEqual(chatgpt_res.status, "VALIDATION_ERROR")
+
+        gemini_res = self.gemini_adapter.validate(None, config={"api_key": "gemini-test-key"})
+        self.assertEqual(gemini_res.status, "VALIDATION_ERROR")
 
     def test_70_unsupported_schema_version_rejected(self):
         """TEST 70: Package with unsupported schema version ('0.9') rejected."""
@@ -179,11 +204,9 @@ class TestVersion5BAdapters(unittest.TestCase):
         self.assertEqual(msgs[0]["role"], "system")
         self.assertIn("historical reference context", msgs[0]["content"].lower())
 
-        # First message is user
         self.assertEqual(msgs[1]["role"], "user")
         self.assertIn("pre-seed funding slides", msgs[1]["content"])
 
-        # Second message is assistant
         self.assertEqual(msgs[2]["role"], "assistant")
         self.assertIn("PortableContextPackage v1.0", msgs[2]["content"])
 
@@ -192,7 +215,6 @@ class TestVersion5BAdapters(unittest.TestCase):
         payload = self.chatgpt_adapter.prepare(self.package)
         content_blob = json.dumps(payload)
 
-        # Message 0 of Conv Gemini ("Can memory layer work across Gemini?") was NOT selected
         unselected_text = self.conv_gemini.messages[0].content
         self.assertNotIn(unselected_text, content_blob)
 
@@ -213,7 +235,7 @@ class TestVersion5BAdapters(unittest.TestCase):
             self.assertIn("source_conversation_id", prov)
 
     def test_75_destination_result_normalized(self):
-        """TEST 75: DestinationResult normalized across Local, ChatGPT, and Stub adapters."""
+        """TEST 75: DestinationResult normalized across Local, ChatGPT, Gemini, and Stub adapters."""
         loc_res = self.local_adapter.execute(self.package)
         self.assertEqual(loc_res.status, "SUCCESS")
         self.assertEqual(loc_res.provider, "Local Export (JSON & Plain Text)")
@@ -222,38 +244,54 @@ class TestVersion5BAdapters(unittest.TestCase):
         self.assertEqual(gpt_res.status, "API_RESPONSE")
         self.assertEqual(gpt_res.provider, "ChatGPT (OpenAI API)")
 
-        gem_res = self.gemini_adapter.execute(self.package)
-        self.assertEqual(gem_res.status, "NOT_SUPPORTED")
+        gem_res = self.gemini_adapter.execute(self.package, config={"api_key": "gemini-test-key"})
+        self.assertEqual(gem_res.status, "API_RESPONSE")
         self.assertEqual(gem_res.provider, "Gemini (Google AI API)")
+
+        cld_res = self.claude_adapter.execute(self.package)
+        self.assertEqual(cld_res.status, "NOT_SUPPORTED")
+        self.assertEqual(cld_res.provider, "Claude (Anthropic API)")
 
     def test_76_missing_api_credentials_handled_safely(self):
         """TEST 76: Missing API credentials return AUTH_REQUIRED status without crashing."""
-        # Ensure OPENAI_API_KEY environment variable is cleared for this test
-        old_env = os.environ.get("OPENAI_API_KEY")
+        old_env_gpt = os.environ.get("OPENAI_API_KEY")
+        old_env_gem = os.environ.get("GEMINI_API_KEY")
         if "OPENAI_API_KEY" in os.environ:
             del os.environ["OPENAI_API_KEY"]
+        if "GEMINI_API_KEY" in os.environ:
+            del os.environ["GEMINI_API_KEY"]
 
         try:
-            res = self.chatgpt_adapter.execute(self.package, config={"api_key": ""})
-            self.assertEqual(res.status, "AUTH_REQUIRED")
-            self.assertEqual(res.error_code, "MISSING_API_KEY")
+            res_gpt = self.chatgpt_adapter.execute(self.package, config={"api_key": ""})
+            self.assertEqual(res_gpt.status, "AUTH_REQUIRED")
+            self.assertEqual(res_gpt.error_code, "MISSING_API_KEY")
+
+            res_gem = self.gemini_adapter.execute(self.package, config={"api_key": ""})
+            self.assertEqual(res_gem.status, "AUTH_REQUIRED")
+            self.assertEqual(res_gem.error_code, "MISSING_API_KEY")
         finally:
-            if old_env:
-                os.environ["OPENAI_API_KEY"] = old_env
+            if old_env_gpt:
+                os.environ["OPENAI_API_KEY"] = old_env_gpt
+            if old_env_gem:
+                os.environ["GEMINI_API_KEY"] = old_env_gem
 
     def test_77_network_error_handled_safely(self):
         """TEST 77: Simulated network/API HTTP errors handled gracefully with NETWORK_ERROR status."""
-        error_adapter = ChatGPTAdapter(mock_executor=mock_error_openai_executor)
-        res = error_adapter.execute(self.package, config={"api_key": "sk-test-key"})
+        error_gpt_adapter = ChatGPTAdapter(mock_executor=mock_error_openai_executor)
+        res_gpt = error_gpt_adapter.execute(self.package, config={"api_key": "sk-test-key"})
+        self.assertEqual(res_gpt.status, "NETWORK_ERROR")
+        self.assertIn("429", res_gpt.message)
 
-        self.assertEqual(res.status, "NETWORK_ERROR")
-        self.assertIn("429", res.message)
+        error_gem_adapter = GeminiAdapter(mock_executor=mock_error_gemini_executor)
+        res_gem = error_gem_adapter.execute(self.package, config={"api_key": "bad-key"})
+        self.assertEqual(res_gem.status, "NETWORK_ERROR")
+        self.assertIn("400", res_gem.message)
 
     def test_78_user_cancellation_flow(self):
         """TEST 78: User cancellation flow returns USER_CANCELLED status without executing transfer."""
         cancel_res = DestinationResult(
             status="USER_CANCELLED",
-            provider="ChatGPT (OpenAI API)",
+            provider="Gemini (Google AI API)",
             message="User explicitly cancelled external transfer at privacy gate."
         )
         self.assertEqual(cancel_res.status, "USER_CANCELLED")
@@ -261,13 +299,16 @@ class TestVersion5BAdapters(unittest.TestCase):
 
     def test_79_adapters_do_not_access_full_database(self):
         """TEST 79: Destination adapters accept only PortableContextPackage and do not query database directly."""
-        # Verify prepare() operates strictly on PortableContextPackage
-        payload = self.chatgpt_adapter.prepare(self.package)
-        self.assertIsNotNone(payload)
-        self.assertIn("messages", payload)
+        payload_gpt = self.chatgpt_adapter.prepare(self.package)
+        self.assertIsNotNone(payload_gpt)
+        self.assertIn("messages", payload_gpt)
 
-    def test_80_regression_all_previous_tests_pass(self):
-        """TEST 80: Registry lists all 4 adapters correctly and maintains total repository stability."""
+        payload_gem = self.gemini_adapter.prepare(self.package)
+        self.assertIsNotNone(payload_gem)
+        self.assertIn("input", payload_gem)
+
+    def test_80_regression_all_adapters_registered(self):
+        """TEST 80: Registry lists all 4 adapters correctly and supports Gemini as an active destination."""
         adapters = self.registry.list_adapters()
         self.assertEqual(len(adapters), 4)
 
@@ -276,6 +317,60 @@ class TestVersion5BAdapters(unittest.TestCase):
         self.assertIn("ChatGPT (OpenAI API)", names)
         self.assertIn("Gemini (Google AI API)", names)
         self.assertIn("Claude (Anthropic API)", names)
+
+        gemini_reg = self.registry.get_adapter("Gemini (Google AI API)")
+        self.assertTrue(gemini_reg.is_supported)
+
+    def test_81_gemini_payload_transformation_preserves_multi_turn_roles(self):
+        """TEST 81: GeminiAdapter transforms package into Interactions API flat payload."""
+        payload = self.gemini_adapter.prepare(self.package)
+
+        self.assertEqual(payload["model"], "gemini-3.6-flash")
+        self.assertIn("system_instruction", payload)
+        sys_text = payload["system_instruction"]
+        self.assertIn("historical reference context", sys_text.lower())
+
+        self.assertIn("input", payload)
+        input_text = payload["input"]
+        self.assertIn("pre-seed funding slides", input_text)
+        self.assertIn("PortableContextPackage v1.0", input_text)
+
+    def test_82_gemini_api_key_topic_separation(self):
+        """TEST 82: GeminiAdapter keeps API key strictly in URL and query/topic strictly in request payload."""
+        captured = {}
+
+        def mock_capture_executor(url, api_key, payload_dict):
+            captured["url"] = url
+            captured["api_key"] = api_key
+            captured["payload"] = payload_dict
+            return 200, {
+                "id": "gemini-test-separation-123",
+                "model": "gemini-3.6-flash",
+                "output_text": "Separation verified."
+            }
+
+        custom_gemini_adapter = GeminiAdapter(mock_executor=mock_capture_executor)
+        test_key = "AIzaSyMockGeminiKey12345"
+        res = custom_gemini_adapter.execute(self.package, config={"api_key": test_key})
+
+        self.assertEqual(res.status, "API_RESPONSE")
+        self.assertEqual(res.response_payload["model"], "gemini-3.6-flash")
+
+        # 1. API URL contains API key in key parameter and endpoint is interactions
+        self.assertIn(f"key={test_key}", captured["url"])
+        self.assertIn("/v1beta/interactions", captured["url"])
+
+        # 2. Topic/query is NOT present in URL
+        self.assertNotIn(self.package.topic, captured["url"])
+
+        # 3. Topic/query is present in Gemini request payload (system_instruction)
+        sys_text = captured["payload"]["system_instruction"]
+        self.assertIn(self.package.topic, sys_text)
+
+        # 4. Invalid API key containing spaces/topic is rejected safely
+        bad_key_res = custom_gemini_adapter.execute(self.package, config={"api_key": self.package.topic})
+        self.assertEqual(bad_key_res.status, "AUTH_REQUIRED")
+        self.assertEqual(bad_key_res.error_code, "INVALID_API_KEY_FORMAT")
 
 
 if __name__ == "__main__":

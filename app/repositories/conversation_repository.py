@@ -21,6 +21,55 @@ class ConversationRepository:
     def __init__(self, db: Optional[Database] = None):
         self.db = db or Database()
 
+    def find_duplicate_id(self, conversation: Conversation) -> Optional[str]:
+        """
+        Checks if an identical conversation already exists in the database.
+        Matches by exact ID OR by (title, source, message_count, and first message snippet).
+        Returns the existing conversation ID if found, otherwise None.
+        """
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 1. Exact ID check
+            cursor.execute("SELECT id FROM conversations WHERE id = ?", (conversation.id,))
+            row = cursor.fetchone()
+            if row:
+                return row["id"]
+
+            # 2. Title + Source match check
+            cursor.execute(
+                "SELECT id FROM conversations WHERE title = ? AND source = ?",
+                (conversation.title, conversation.source),
+            )
+            candidate_rows = cursor.fetchall()
+            if not candidate_rows:
+                return None
+
+            first_snippet = conversation.messages[0].content[:100] if conversation.messages else ""
+
+            for c_row in candidate_rows:
+                c_id = c_row["id"]
+                cursor.execute("SELECT COUNT(*) as cnt FROM messages WHERE conversation_id = ?", (c_id,))
+                cnt = cursor.fetchone()["cnt"]
+
+                if cnt == conversation.message_count:
+                    # Compare first message snippet
+                    cursor.execute(
+                        "SELECT content FROM messages WHERE conversation_id = ? AND msg_index = 0",
+                        (c_id,),
+                    )
+                    first_msg_row = cursor.fetchone()
+                    if first_msg_row:
+                        existing_snippet = first_msg_row["content"][:100]
+                        if existing_snippet == first_snippet:
+                            return c_id
+
+            return None
+
+    def is_duplicate(self, conversation: Conversation) -> bool:
+        """Returns True if the conversation is a duplicate of an existing record."""
+        return self.find_duplicate_id(conversation) is not None
+
     def save_conversation(self, conversation: Conversation) -> str:
         """
         Saves a conversation and all its messages into the database in a single atomic transaction.

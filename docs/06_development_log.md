@@ -47,3 +47,20 @@
     - `"I need to remotely monitor household supply without physically inspecting it."` -> **Smart Water Tank Monitoring System (65%)**
     - `"Quantum entanglement circuit."` -> **No sufficiently relevant memory found.**
     - `"Childhood cricket memories."` -> **No sufficiently relevant memory found.**
+
+---
+
+## Log Entry 5: Milestone 8 — Bulk History Import System
+- **Problem Solved**: Users accumulate hundreds of conversations across AI platforms and cannot manually locate individual conversations to upload. V1 requires bulk history ingestion.
+- **Multi-Format Extraction**:
+  - Extended `JSONParser` with `parse_bulk()` for ChatGPT `conversations.json` exports.
+  - Created `BulkParser` in `app/parsers/bulk_parser.py` for extracting `.zip` archives containing multiple JSON/TXT files in memory.
+- **Duplicate Prevention**:
+  - Added `is_duplicate()` and `find_duplicate_id()` to `ConversationRepository` using title + message count + content snippet fingerprinting.
+- **Bulk Import Engine & Progress Reporting**:
+  - Created `BulkImportEngine` in `app/services/bulk_import.py` to manage multi-file parsing, duplicate filtering, batch DB saves, progress callbacks, and metric reporting (`BulkImportResult`).
+- **Streamlit UI Upgrade**:
+  - Upgraded **📥 Import History** tab in `app/main.py` with dual mode (`📦 Bulk History Import` vs `📄 Single Conversation File`).
+  - Added real-time progress indicators (`327 / 1,248 conversations`) and import summary report cards.
+- **Automated Tests**:
+  - Created `tests/test_bulk_import.py` (4 new tests, 34 total tests passing cleanly).

@@ -36,8 +36,15 @@ class JSONParser(BaseParser):
         messages: List[Message] = []
         original_date = None
 
-        # Case 1: Root is a list of message objects
+        # Case 1: Root is a list
         if isinstance(data, list):
+            # Check if elements are conversation objects (e.g. ChatGPT bulk export conversations.json)
+            if data and isinstance(data[0], dict) and ("mapping" in data[0] or "messages" in data[0]):
+                convs = self.parse_bulk(content, filename=filename)
+                if convs:
+                    return convs[0]
+                raise ParsingError("No valid conversations parsed from JSON array.")
+            # Otherwise, it's a list of message objects for a single conversation
             messages = self._parse_message_list(data)
 
         # Case 2: Root is a dict
@@ -70,6 +77,64 @@ class JSONParser(BaseParser):
             source=source,
             original_date=original_date,
         )
+
+    def parse_bulk(self, content: Union[str, bytes], filename: str = "conversations.json") -> List[Conversation]:
+        """
+        Parses a bulk JSON file (such as a ChatGPT export `conversations.json`) containing
+        a list of multiple conversation objects. Returns a list of standardized `Conversation` objects.
+        """
+        if isinstance(content, bytes):
+            try:
+                content = content.decode("utf-8")
+            except UnicodeDecodeError as e:
+                raise ParsingError(f"Failed to decode UTF-8 bytes: {e}")
+
+        if not content or not content.strip():
+            return []
+
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError as e:
+            raise ParsingError(f"Invalid JSON format: {e}")
+
+        conversations: List[Conversation] = []
+
+        if isinstance(data, list):
+            for idx, item in enumerate(data):
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    title = item.get("title") or f"Conversation {idx + 1}"
+                    source = item.get("source") or "ChatGPT"
+                    original_date = str(item.get("create_time") or item.get("created_at") or "")
+
+                    if "mapping" in item and isinstance(item["mapping"], dict):
+                        msgs = self._parse_chatgpt_mapping(item["mapping"])
+                        source = "ChatGPT"
+                    elif "messages" in item and isinstance(item["messages"], list):
+                        msgs = self._parse_message_list(item["messages"])
+                    else:
+                        continue
+
+                    if msgs:
+                        conversations.append(
+                            Conversation(
+                                title=title,
+                                messages=msgs,
+                                source=source,
+                                original_date=original_date if original_date else None,
+                            )
+                        )
+                except Exception:
+                    continue
+        elif isinstance(data, dict):
+            try:
+                conv = self.parse(content, filename=filename)
+                conversations.append(conv)
+            except ParsingError:
+                pass
+
+        return conversations
 
     def _parse_message_list(self, raw_list: List[Any]) -> List[Message]:
         messages: List[Message] = []

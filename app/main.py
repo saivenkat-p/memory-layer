@@ -121,25 +121,29 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+from app.services.bulk_import import BulkImportEngine
+
+
 @st.cache_resource
 def get_services():
-    """Initializes singletons for Database, Repository, HybridSearchEngine, and Assistant."""
+    """Initializes singletons for Database, Repository, HybridSearchEngine, Assistant, and BulkImportEngine."""
     db_path = os.path.join("data", "memory.db")
     db = Database(db_path)
     repo = ConversationRepository(db)
     search_engine = HybridSearchEngine(repo)
     assistant = AskMyMemoryAssistant(search_engine)
-    return repo, search_engine, assistant
+    bulk_engine = BulkImportEngine(repo)
+    return repo, search_engine, assistant, bulk_engine
 
 
 try:
-    repo, search_engine, assistant = get_services()
+    repo, search_engine, assistant, bulk_engine = get_services()
     if not hasattr(search_engine.semantic_engine.encoder, "model") or search_engine.semantic_engine.encoder.model is None:
         st.cache_resource.clear()
-        repo, search_engine, assistant = get_services()
+        repo, search_engine, assistant, bulk_engine = get_services()
 except Exception:
     st.cache_resource.clear()
-    repo, search_engine, assistant = get_services()
+    repo, search_engine, assistant, bulk_engine = get_services()
 
 
 # Sidebar Navigation
@@ -151,7 +155,7 @@ nav_option = st.sidebar.radio(
     "Navigation",
     options=[
         "📊 Dashboard",
-        "📥 Import Conversation",
+        "📥 Import History",
         "💬 Conversations",
         "🔍 Search Memory",
         "🤖 Ask My Memory",
@@ -239,50 +243,113 @@ if nav_option == "📊 Dashboard":
 
 
 # -----------------------------------------------------------------------------
-# VIEW 2: IMPORT CONVERSATION
+# VIEW 2: IMPORT HISTORY (BULK & SINGLE)
 # -----------------------------------------------------------------------------
-elif nav_option == "📥 Import Conversation":
-    st.markdown('<div class="main-header">Import Conversation</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">Upload chat exports (.json or .txt) from ChatGPT, Gemini, Claude, or custom logs.</div>', unsafe_allow_html=True)
+elif nav_option == "📥 Import History":
+    st.markdown('<div class="main-header">Import History</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Import your complete AI conversation history (ChatGPT export ZIP/JSON, Gemini, Claude, or TXT logs).</div>', unsafe_allow_html=True)
 
-    uploaded_file = st.file_uploader("Select conversation file", type=["json", "txt", "md"])
+    import_mode = st.radio(
+        "Import Mode",
+        ["📦 Bulk History Import (Recommended)", "📄 Single Conversation File"],
+        horizontal=True,
+    )
 
-    if uploaded_file is not None:
-        file_bytes = uploaded_file.read()
-        file_name = uploaded_file.name
+    if import_mode == "📦 Bulk History Import (Recommended)":
+        st.info("💡 **Upload your exported conversation history archive (`.zip`) or bulk export file (`conversations.json`).** The system will parse all conversations, skip duplicates, and generate neural vector embeddings automatically.")
 
-        try:
-            parsed_conv = parse_conversation_file(file_bytes, file_name)
-            st.success(f"✅ Successfully parsed '{parsed_conv.title}' ({parsed_conv.message_count} messages extracted)")
+        uploaded_archive = st.file_uploader(
+            "Select exported archive or bulk file",
+            type=["zip", "json", "txt"],
+            key="bulk_uploader",
+        )
 
-            st.subheader("Manual Metadata (Optional)")
-            col_a, col_b = st.columns(2)
-            with col_a:
-                category = st.selectbox(
-                    "Category",
-                    ["Startup Idea", "Learning", "Research", "Project", "Personal", "Other"],
-                    index=0,
-                )
-                tags_input = st.text_input("Tags (comma separated)", value="AI, Notes")
-            with col_b:
-                description = st.text_area("Description / Summary", value=f"Imported conversation from {parsed_conv.source}")
+        skip_duplicates = st.checkbox("Skip duplicate conversations during import", value=True)
 
-            parsed_conv.category = category
-            parsed_conv.tags = [t.strip() for t in tags_input.split(",") if t.strip()]
-            parsed_conv.description = description
+        if uploaded_archive is not None:
+            file_bytes = uploaded_archive.read()
+            file_name = uploaded_archive.name
 
-            with st.expander("👀 Preview Parsed Messages", expanded=False):
-                for msg in parsed_conv.messages:
-                    role_class = "chat-user" if msg.role == "user" else "chat-assistant"
-                    st.markdown(f'<div class="{role_class}"><b>{msg.role.title()}:</b> {msg.content}</div>', unsafe_allow_html=True)
+            if st.button("🚀 Start Bulk Import & Neural Indexing", type="primary"):
+                progress_bar = st.progress(0.0)
+                status_text = st.empty()
 
-            if st.button("💾 Save Conversation to Memory Layer", type="primary"):
-                repo.save_conversation(parsed_conv)
-                st.toast("Conversation saved successfully with neural vector embeddings!", icon="🎉")
-                st.success("Saved! You can now search for topics discussed in this conversation.")
+                def streamlit_progress_cb(current: int, total: int, message: str):
+                    pct = float(current) / float(total) if total > 0 else 0.0
+                    progress_bar.progress(min(1.0, max(0.0, pct)))
+                    status_text.markdown(f"⏳ **{message}**")
 
-        except ParsingError as e:
-            st.error(f"❌ Failed to parse file: {e}")
+                with st.spinner("Processing bulk export data..."):
+                    result = bulk_engine.import_archive_or_file(
+                        file_bytes,
+                        file_name,
+                        progress_callback=streamlit_progress_cb,
+                        skip_duplicates=skip_duplicates,
+                    )
+
+                status_text.empty()
+                progress_bar.empty()
+
+                st.success("🎉 **Bulk History Import Complete!**")
+
+                st.subheader("📊 Import Summary Report")
+                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                with col_m1:
+                    st.metric("Conversations Detected", result.conversations_detected)
+                with col_m2:
+                    st.metric("Conversations Imported", result.conversations_imported)
+                with col_m3:
+                    st.metric("Duplicates Skipped", result.duplicates_skipped)
+                with col_m4:
+                    st.metric("Messages Ingested", result.messages_imported)
+
+                if result.skipped_items:
+                    with st.expander("ℹ️ Details on Skipped / Failed Items"):
+                        for item in result.skipped_items:
+                            st.write(f"• {item}")
+
+                st.toast(f"Imported {result.conversations_imported} conversation(s) successfully!", icon="✅")
+
+    else:
+        # Single File Import Mode
+        uploaded_file = st.file_uploader("Select single conversation file", type=["json", "txt", "md"], key="single_uploader")
+
+        if uploaded_file is not None:
+            file_bytes = uploaded_file.read()
+            file_name = uploaded_file.name
+
+            try:
+                parsed_conv = parse_conversation_file(file_bytes, file_name)
+                st.success(f"✅ Successfully parsed '{parsed_conv.title}' ({parsed_conv.message_count} messages extracted)")
+
+                st.subheader("Manual Metadata (Optional)")
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    category = st.selectbox(
+                        "Category",
+                        ["Startup Idea", "Learning", "Research", "Project", "Personal", "Other"],
+                        index=0,
+                    )
+                    tags_input = st.text_input("Tags (comma separated)", value="AI, Notes")
+                with col_b:
+                    description = st.text_area("Description / Summary", value=f"Imported conversation from {parsed_conv.source}")
+
+                parsed_conv.category = category
+                parsed_conv.tags = [t.strip() for t in tags_input.split(",") if t.strip()]
+                parsed_conv.description = description
+
+                with st.expander("👀 Preview Parsed Messages", expanded=False):
+                    for msg in parsed_conv.messages:
+                        role_class = "chat-user" if msg.role == "user" else "chat-assistant"
+                        st.markdown(f'<div class="{role_class}"><b>{msg.role.title()}:</b> {msg.content}</div>', unsafe_allow_html=True)
+
+                if st.button("💾 Save Conversation to Memory Layer", type="primary"):
+                    repo.save_conversation(parsed_conv)
+                    st.toast("Conversation saved successfully with neural vector embeddings!", icon="🎉")
+                    st.success("Saved! You can now search for topics discussed in this conversation.")
+
+            except ParsingError as e:
+                st.error(f"❌ Failed to parse file: {e}")
 
 
 # -----------------------------------------------------------------------------

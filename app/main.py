@@ -123,11 +123,13 @@ from app.services.bulk_import import BulkImportEngine
 from app.search.find_here import FindHereEngine
 from app.services.topic_extractor import TopicExtractionEngine
 from app.services.context_composer import ContextComposer
+from app.services.export_engine import LocalExportDestination
+from app.services.destination_adapters.registry import DestinationRegistry
 
 
 @st.cache_resource
 def get_services():
-    """Initializes singletons for Database, Repository, HybridSearchEngine, Assistant, BulkImportEngine, FindHereEngine, TopicExtractionEngine, and ContextComposer."""
+    """Initializes singletons for Database, Repository, HybridSearchEngine, Assistant, BulkImportEngine, FindHereEngine, TopicExtractionEngine, ContextComposer, LocalExportDestination, and DestinationRegistry."""
     db_path = os.path.join("data", "memory.db")
     db = Database(db_path)
     repo = ConversationRepository(db)
@@ -137,17 +139,19 @@ def get_services():
     find_here_engine = FindHereEngine(repo)
     topic_extractor = TopicExtractionEngine(repo)
     composer = ContextComposer(repo, search_engine)
-    return repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor, composer
+    local_exporter = LocalExportDestination()
+    dest_registry = DestinationRegistry()
+    return repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor, composer, local_exporter, dest_registry
 
 
 try:
-    repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor, composer = get_services()
+    repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor, composer, local_exporter, dest_registry = get_services()
     if not hasattr(search_engine.semantic_engine.encoder, "model") or search_engine.semantic_engine.encoder.model is None:
         st.cache_resource.clear()
-        repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor, composer = get_services()
+        repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor, composer, local_exporter, dest_registry = get_services()
 except Exception:
     st.cache_resource.clear()
-    repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor, composer = get_services()
+    repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor, composer, local_exporter, dest_registry = get_services()
 
 
 # Sidebar Navigation
@@ -497,10 +501,12 @@ elif nav_option == "🧩 Compose Context":
                 with st.spinner("Searching multi-topic context across memory..."):
                     grouped_results = composer.search_context(comp_query, limit=50)
                     st.session_state["compose_grouped_results"] = grouped_results
+                    st.session_state["compose_query_active"] = comp_query
                     init_selected = []
                     for cid, grp in grouped_results.items():
-                        for cand in grp["candidates"]:
-                            init_selected.append(cand)
+                        if cid != "_diagnostics" and "candidates" in grp:
+                            for cand in grp["candidates"]:
+                                init_selected.append(cand)
                     st.session_state["compose_selected_candidates"] = init_selected
 
     grouped = st.session_state.get("compose_grouped_results", {})
@@ -515,7 +521,7 @@ elif nav_option == "🧩 Compose Context":
         # Multi-Topic Diagnostics Expander
         if diagnostics:
             with st.expander("🔍 View Multi-Topic Diagnostics & Ranking Breakdown", expanded=False):
-                st.markdown(f"**Composition Query:** `{diagnostics['query']}`")
+                st.markdown(f"**Composition Query:** `{diagnostics.get('original_query', diagnostics.get('query'))}`")
                 st.markdown(f"**Detected Sub-Topics ({len(diagnostics['detected_topics'])}):** {', '.join(f'`{t}`' for t in diagnostics['detected_topics'])}")
                 
                 diag_c1, diag_c2, diag_c3, diag_c4 = st.columns(4)
@@ -575,7 +581,8 @@ elif nav_option == "🧩 Compose Context":
         st.divider()
         st.subheader("🧩 Step 2: Context Preview & Reordering")
 
-        active_preview = composer.build_context_preview(ordered_selected, query=comp_query)
+        active_query = st.session_state.get("compose_query_active", comp_query)
+        active_preview = composer.build_context_preview(ordered_selected, query=active_query)
         st.markdown(f"Selected **{len(active_preview.selected_candidates)} message(s)** from **{len(active_preview.source_conversations)} conversation(s)** across **{len(active_preview.source_providers)} provider(s)**:")
 
         if active_preview.source_providers:
@@ -608,8 +615,133 @@ elif nav_option == "🧩 Compose Context":
                         st.session_state["compose_selected_candidates"] = cands_to_display
                         st.rerun()
 
+            # V5B Destination Integration
             st.divider()
-            st.subheader("🚀 Step 3: Create Composed Conversation")
+            st.subheader("🔌 Step 3: AI Destination Handoff (V5B)")
+            st.caption("🔒 **Local-First & Explicit Privacy**: Choose an AI destination adapter. External transmission requires explicit confirmation.")
+
+            dest_col1, dest_col2 = st.columns([3, 2])
+            with dest_col1:
+                destination_choice = st.selectbox(
+                    "AI Destination Adapter",
+                    options=dest_registry.list_provider_names(),
+                    index=0,
+                    key="v5b_dest_choice"
+                )
+            with dest_col2:
+                if destination_choice == "Local Export (JSON & Plain Text)":
+                    st.success("🔒 **Local First**: 100% offline. Zero external network calls.")
+                elif destination_choice == "ChatGPT (OpenAI API)":
+                    st.info("⚡ **Live API Adapter**: Transmits selected context to OpenAI Chat API.")
+                else:
+                    st.warning("⚠️ **Planned Adapter**: Use Local Export or ChatGPT (OpenAI API).")
+
+            # Local Export Path
+            if destination_choice == "Local Export (JSON & Plain Text)":
+                if st.button("📄 Generate Portable Context Package (v1.0)", key="gen_v5a_pkg_btn"):
+                    pkg = local_exporter.prepare_context(active_preview)
+                    st.session_state["v5a_active_package"] = pkg
+
+                active_pkg = st.session_state.get("v5a_active_package")
+                if active_pkg:
+                    with st.expander("📦 Inspection & Export Package Payload", expanded=True):
+                        st.success(f"Generated `PortableContextPackage` (ID: `{active_pkg.package_id[:8]}...`, Schema: `v{active_pkg.schema_version}`)")
+
+                        tab_text, tab_json, tab_prov = st.tabs(["📄 Plain-Text Context (Markdown)", "📦 Versioned JSON Package (v1.0)", "🔎 Provenance & Metadata"])
+
+                        with tab_text:
+                            st.code(active_pkg.context_text, language="markdown")
+                            st.download_button(
+                                label="💾 Download Plain-Text Context (.txt)",
+                                data=active_pkg.context_text,
+                                file_name=f"context_{active_pkg.package_id[:8]}.txt",
+                                mime="text/plain",
+                                key="dl_text_btn"
+                            )
+
+                        with tab_json:
+                            json_str = active_pkg.to_json()
+                            st.code(json_str, language="json")
+                            st.download_button(
+                                label="💾 Download JSON Package (.json)",
+                                data=json_str,
+                                file_name=f"package_{active_pkg.package_id[:8]}.json",
+                                mime="application/json",
+                                key="dl_json_btn"
+                            )
+
+                        with tab_prov:
+                            st.markdown(f"**Title:** {active_pkg.title}")
+                            st.markdown(f"**Topic Query:** `{active_pkg.topic}`")
+                            st.markdown(f"**Created At:** {active_pkg.created_at}")
+                            st.markdown(f"**Source Providers:** {active_pkg.source_providers}")
+                            st.markdown("**Provenance Audit Records:**")
+                            st.json(active_pkg.provenance)
+
+            # ChatGPT (OpenAI API) Path
+            elif destination_choice == "ChatGPT (OpenAI API)":
+                openai_key_input = st.text_input(
+                    "OpenAI API Key (or set OPENAI_API_KEY environment variable)",
+                    type="password",
+                    key="openai_api_key_input",
+                    help="Your API key is never hardcoded, logged, or saved to disk."
+                )
+
+                if st.button("🔒 Review & Prepare Transfer to ChatGPT", key="review_chatgpt_btn"):
+                    pkg = local_exporter.prepare_context(active_preview)
+                    st.session_state["v5b_pending_package"] = pkg
+                    st.session_state["v5b_awaiting_confirm"] = True
+
+                awaiting_confirm = st.session_state.get("v5b_awaiting_confirm", False)
+                pending_pkg = st.session_state.get("v5b_pending_package")
+
+                if awaiting_confirm and pending_pkg:
+                    st.warning("🔒 **Transfer Confirmation & Privacy Gate**")
+                    with st.expander("📋 Review Transfer Summary", expanded=True):
+                        st.markdown(f"**Destination:** `ChatGPT (OpenAI API)`")
+                        st.markdown(f"**Topic:** `{pending_pkg.topic}`")
+                        st.markdown(f"**Selected Messages:** `{len(pending_pkg.messages)}`")
+                        st.markdown(f"**Source Conversations:** `{len(pending_pkg.source_conversations)}`")
+                        st.markdown(f"**Source Providers:** `{pending_pkg.source_providers}`")
+                        st.error("⚠️ **Data Leaving Local Environment:**\nOnly the selected messages and topic context will be transmitted to OpenAI API under your API key.")
+
+                        conf_c1, conf_c2 = st.columns(2)
+                        with conf_c1:
+                            if st.button("❌ Cancel Transfer", key="cancel_transfer_btn"):
+                                st.session_state["v5b_awaiting_confirm"] = False
+                                st.session_state["v5b_pending_package"] = None
+                                st.rerun()
+                        with conf_c2:
+                            if st.button("🚀 Confirm & Send to ChatGPT", type="primary", key="confirm_send_chatgpt_btn"):
+                                adapter = dest_registry.get_adapter("ChatGPT (OpenAI API)")
+                                config = {"api_key": openai_key_input} if openai_key_input else {}
+                                result = adapter.execute(pending_pkg, config=config)
+                                st.session_state["v5b_transfer_result"] = result
+                                st.session_state["v5b_awaiting_confirm"] = False
+                                st.rerun()
+
+                transfer_result = st.session_state.get("v5b_transfer_result")
+                if transfer_result:
+                    st.divider()
+                    if transfer_result.status == "API_RESPONSE":
+                        st.success(f"🎉 **{transfer_result.message}**")
+                        if transfer_result.response_payload and "response_text" in transfer_result.response_payload:
+                            st.markdown("### 🤖 ChatGPT Response:")
+                            st.info(transfer_result.response_payload["response_text"])
+                    elif transfer_result.status == "AUTH_REQUIRED":
+                        st.error(f"🔑 **Authentication Required**: {transfer_result.message}")
+                    else:
+                        st.error(f"❌ **Transfer Failed [{transfer_result.status}]**: {transfer_result.message}")
+
+            # Stub Destinations (Gemini / Claude)
+            else:
+                adapter = dest_registry.get_adapter(destination_choice)
+                if adapter:
+                    res = adapter.validate(None)
+                    st.info(f"ℹ️ **{res.provider}**: {res.message}")
+
+            st.divider()
+            st.subheader("🚀 Step 4: Create Composed Conversation")
 
             default_title = f"Composed: {comp_query[:35].title()}" if comp_query else "Composed: Context Strategy"
             comp_title_input = st.text_input("Composed Conversation Title", value=default_title, key="comp_title_input")
@@ -627,6 +759,8 @@ elif nav_option == "🧩 Compose Context":
                         del st.session_state["compose_grouped_results"]
                     if "compose_selected_candidates" in st.session_state:
                         del st.session_state["compose_selected_candidates"]
+                    if "v5a_active_package" in st.session_state:
+                        del st.session_state["v5a_active_package"]
                     st.rerun()
 
 

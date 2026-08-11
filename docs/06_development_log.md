@@ -109,3 +109,50 @@
 - **Automated Tests & Regression Suite**:
   - Created `tests/test_version4_composition.py` (16 tests including multi-topic decomposition, candidate deduplication, and parent vs continuation reranking).
   - Executed full regression test suite: **56 / 56 tests PASSED** (`Ran 56 tests in 1416.500s — OK`).
+
+---
+
+## Log Entry 8: Milestone V5A — Live AI Integration Foundation (Portable Context Package & Export Engine)
+- **Problem Solved**:
+  - Establishes the clear architectural contract between V4 Context Composition and V5 AI Destinations.
+  - V4 owns retrieval, selection, composition, provenance, ordering.
+  - V5 owns delivery, export, and AI-platform integration.
+- **Portable Context Package (`PortableContextPackage`)**:
+  - Added `PortableContextPackage` dataclass in `app/models/schemas.py` (`schema_version: "1.0"`).
+  - Holds explicit separation between user goal/topic, source conversations, provider counts, provenance audit records, and deterministic formatted context text.
+- **Export Engine & Local Export Destination Adapter**:
+  - Created `app/services/export_engine.py` defining `BaseDestinationAdapter` abstraction and `LocalExportDestination`.
+  - Generates deterministic Markdown/plain-text formatting grouping messages by source conversation and provider.
+  - Local export executes 100% offline with zero external network or API calls.
+- **Streamlit UI Integration**:
+  - Integrated **🔌 Portable Context Package (V5A Foundation)** section into `app/main.py`.
+  - Renders inspection tabs: Plain-Text Context (Markdown), Versioned JSON Package (v1.0), and Provenance Audit Records with download controls.
+- **Automated Tests & Regression Suite**:
+  - Created `tests/test_version5a_export.py` (11 unit/integration tests).
+  - Executed full regression test suite: **67 / 67 tests PASSED** (`Ran 67 tests in 91.183s — OK`).
+
+---
+
+## Log Entry 9: Milestone V5B — Live AI Integration (Destination Adapters & ChatGPT API Adapter)
+- **Problem Solved**:
+  - Implements the first real bridge transferring user-selected context packages into an external AI destination (`ChatGPT (OpenAI API)`) with zero data leaks and mandatory local-first user privacy confirmation.
+- **Destination Adapters Architecture (`app/services/destination_adapters/`)**:
+  - Created `DestinationResult` schema (`status`, `provider`, `message`, `destination_url`, `copied_to_clipboard`, `external_id`, `error_code`, `response_payload`).
+  - Created `DestinationAdapter` Abstract Base Class defining `provider_name`, `is_supported`, `validate()`, `prepare()`, `execute()`.
+  - Created `LocalExportAdapter` wrapping offline package generation.
+  - Created `ChatGPTAdapter` implementing native multi-turn message payload transformation for official OpenAI Chat API (`/v1/chat/completions`).
+  - Created explicit `GeminiAdapter` & `ClaudeAdapter` stubs returning status `NOT_SUPPORTED`.
+  - Created `DestinationRegistry` factory (`get_adapter()`).
+- **Historical Context Tagging & Payload Transformation**:
+  - Previews system context message explicitly instructing the model to treat package messages as historical reference material, not direct prior session outputs.
+  - Preserves ordered multi-turn structure (`user` / `assistant` roles) with source conversation and provider metadata tags.
+- **Streamlit UI Privacy Gate & Credential Security**:
+  - Password-masked API key input (supports `OPENAI_API_KEY` env var or UI input). Key is never hardcoded, logged, or saved to disk.
+  - Rendered mandatory **🔒 Transfer Confirmation & Privacy Gate** showing destination, topic, selected message count, source conversations, source providers, and clear notice of data leaving local machine before execution.
+- **Automated Unit & Integration Tests**:
+  - Created `tests/test_version5b_adapters.py` (13 tests: TEST 68 to TEST 80 using mock execution handlers with zero real network calls).
+  - Created `tests/integration/test_live_chatgpt_api.py` (isolated opt-in live test suite requiring `RUN_LIVE_API_TESTS=1`).
+  - Executed full regression test suite: **80 / 80 tests PASSED** (`Ran 80 tests in 91.602s — OK`).
+
+  - Created `tests/test_version5a_export.py` (10 tests covering package creation, schema version 1.0, provenance preservation, ordering, deterministic text generation, no unselected data leakage, JSON serialization, and local export execution).
+  - Executed full regression test suite: **66 / 66 tests PASSED** (`Ran 66 tests in 107.965s — OK`).

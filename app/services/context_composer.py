@@ -40,7 +40,7 @@ class ContextComposer:
         Decomposes a complex multi-topic query string into distinct topic sub-queries.
         Example:
         'Bring together everything about my Memory Layer, funding strategy, and using it across ChatGPT/Gemini.'
-        -> ['Memory Layer', 'funding strategy', 'using it across ChatGPT Gemini']
+        -> ['Memory Layer', 'funding strategy', 'ChatGPT Gemini']
         """
         if not query or not query.strip():
             return []
@@ -51,7 +51,7 @@ class ContextComposer:
         lead_ins = [
             r"^(bring|gather|collect|find|get)\s+(together\s+)?(everything\s+)?(all\s+)?(about\s+)?",
             r"^(show|give)\s+me\s+(everything\s+)?(all\s+)?(about\s+)?",
-            r"^(i\s+want\s+to\s+)?(combine|compose)\s+",
+            r"^(i\s+want\s+to\s+)?(combine|compose)\s+(everything\s+)?(all\s+)?(about\s+)?",
         ]
         for pattern in lead_ins:
             text = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
@@ -62,8 +62,17 @@ class ContextComposer:
 
         final_topics = []
         for p in parts:
-            clean_p = re.sub(r"[^\w\s-]", " ", p).strip()
-            if len(clean_p) > 2 and clean_p.lower() not in {"everything", "about", "using", "across", "chats"}:
+            clean_p = p.strip()
+            # Remove leading possessives/stopwords
+            clean_p = re.sub(r"^(my|our|the|a|an)\s+", "", clean_p, flags=re.IGNORECASE).strip()
+            # Remove clause prefixes
+            clean_p = re.sub(r"^(using\s+it\s+across|using\s+across|how\s+to\s+use|using|across|integration\s+across)\s+", "", clean_p, flags=re.IGNORECASE).strip()
+            # Normalize slashes / to space
+            clean_p = clean_p.replace("/", " ").replace("-", " ")
+            clean_p = re.sub(r"[^\w\s]", "", clean_p).strip()
+            clean_p = re.sub(r"\s+", " ", clean_p)
+
+            if len(clean_p) > 2 and clean_p.lower() not in {"everything", "about", "chats"}:
                 final_topics.append(clean_p)
 
         if not final_topics:
@@ -102,22 +111,67 @@ class ContextComposer:
 
         clean_query = query.strip()
         topics = self.decompose_query(clean_query)
+
+        search_queries_map: Dict[str, str] = {}
+        topic_counts: Dict[str, int] = {}
+        top_candidates_map: Dict[str, List[Dict[str, Any]]] = {}
         
         raw_candidates_map: Dict[str, ContextCandidate] = {}
-        topic_counts: Dict[str, int] = {}
+        seen_parent_msg_ids: set = set()
+        seen_content_hashes: set = set()
+        
         total_raw_candidates = 0
+        parent_cont_dedup_count = 0
 
         # Execute search per sub-topic
         for topic in topics:
-            results: List[SearchResult] = self.search_engine.search(topic, limit=25)
+            search_q = topic
+            search_queries_map[topic] = search_q
+
+            results: List[SearchResult] = self.search_engine.search(search_q, limit=25)
             topic_counts[topic] = len(results)
             total_raw_candidates += len(results)
+
+            top_summaries = []
+            for res in results[:3]:
+                top_summaries.append({
+                    "role": res.matched_role,
+                    "content": res.matched_content[:80] + "..." if len(res.matched_content) > 80 else res.matched_content,
+                    "score": res.score,
+                    "conversation_title": res.conversation_title,
+                })
+            top_candidates_map[topic] = top_summaries
 
             for res in results:
                 msg_id = res.message_id
                 cid = res.conversation_id
                 title = res.conversation_title
                 is_derived = title.startswith("Continued:") or title.startswith("Composed:")
+
+                # Inspect message record for source_message_id provenance
+                source_msg_id = None
+                try:
+                    row = self.repo.db.get_connection().cursor().execute(
+                        "SELECT source_message_id FROM messages WHERE id = ?", (msg_id,)
+                    ).fetchone()
+                    if row and row["source_message_id"]:
+                        source_msg_id = row["source_message_id"]
+                except Exception:
+                    pass
+
+                content_clean = res.matched_content.strip().lower()
+
+                # Check if this continuation candidate overlaps with an original parent candidate
+                if is_derived and (
+                    (source_msg_id and source_msg_id in seen_parent_msg_ids) or
+                    (content_clean in seen_content_hashes)
+                ):
+                    parent_cont_dedup_count += 1
+                    continue
+
+                if not is_derived:
+                    seen_parent_msg_ids.add(msg_id)
+                    seen_content_hashes.add(content_clean)
 
                 # Calculate raw semantic score
                 raw_sem = 0.0
@@ -161,10 +215,9 @@ class ContextComposer:
                 else:
                     raw_candidates_map[msg_id] = cand
 
-        duplicates_removed = total_raw_candidates - len(raw_candidates_map)
-
         final_candidates = list(raw_candidates_map.values())
-        
+        duplicates_removed = (total_raw_candidates - len(final_candidates)) + parent_cont_dedup_count
+
         # Group candidates by conversation_id
         grouped: Dict[str, Dict[str, Any]] = {}
         for cand in final_candidates:
@@ -195,17 +248,22 @@ class ContextComposer:
 
         sorted_grouped: Dict[str, Dict[str, Any]] = {cid: grouped[cid] for cid in sorted_conv_ids}
 
-        # Attach Diagnostics metadata
+        # Attach 9-Point Detailed Diagnostics metadata
         providers = set(g["source"] for g in sorted_grouped.values())
         sorted_grouped["_diagnostics"] = {
-            "query": query,
+            "original_query": query,
             "detected_topics": topics,
+            "search_queries": search_queries_map,
             "candidates_per_topic": topic_counts,
+            "top_candidates_per_topic": top_candidates_map,
             "total_raw_candidates": total_raw_candidates,
+            "final_merged_candidates": len(final_candidates),
             "duplicates_removed": duplicates_removed,
+            "parent_continuation_deduped": parent_cont_dedup_count,
+            "diversity_reranking_decisions": f"Prioritized original parent conversations, deduplicated {parent_cont_dedup_count} continuation message overlaps, and allocated candidates across {len(topics)} topic groups.",
             "conversations_found": len(sorted_grouped),
             "providers_found": len(providers),
-            "reranking_applied": True,
+            "query": query,
         }
 
         return sorted_grouped
@@ -217,8 +275,15 @@ class ContextComposer:
         Constructs a ComposedContext preview object from selected candidate list.
         """
         comp_id = str(uuid.uuid4())
-        comp_title = title.strip() if title and title.strip() else f"Composed: {query.strip()[:30]}"
+        clean_query = query.strip() if query else ""
         
+        if title and title.strip() and title.strip() != "Composed:":
+            comp_title = title.strip()
+        elif clean_query:
+            comp_title = f"Composed: {clean_query}"
+        else:
+            comp_title = "Composed: Multi-Topic Context"
+
         # Deduplicate while preserving order
         unique_candidates: List[ContextCandidate] = []
         seen_ids = set()
@@ -230,7 +295,7 @@ class ContextComposer:
         return ComposedContext(
             composition_id=comp_id,
             title=comp_title,
-            query=query.strip(),
+            query=clean_query if clean_query else comp_title,
             selected_candidates=unique_candidates,
         )
 

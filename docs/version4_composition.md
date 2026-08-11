@@ -30,40 +30,41 @@ The Memory Layer operates as a meta-layer positioned above individual AI convers
                                ↓
                     COMPOSED CONVERSATION
                                ↓
-                     [Future Version 5]
-                               ↓
-                  Choose AI destination
+                    [V5A Portable Package]
+                    schema_version: "1.0"
 ```
 
 ---
 
 ## 2. Multi-Topic Retrieval & Reranking Architecture
 
-### 2.1 Topic Decomposition Algorithm ([`ContextComposer.decompose_query`](file:///c:/Users/saive/OneDrive/Desktop/personal%20-memory-layer/app/services/context_composer.py))
+### 2.1 Topic Decomposition Engine ([`ContextComposer.decompose_query`](file:///c:/Users/saive/OneDrive/Desktop/personal%20-memory-layer/app/services/context_composer.py))
 When a complex composition query is entered:
 `"Bring together everything about my Memory Layer, funding strategy, and using it across ChatGPT/Gemini."`
 
-The decomposition engine extracts distinct topic components:
-1. `Topic A`: `"Memory Layer"`
-2. `Topic B`: `"funding strategy"`
-3. `Topic C`: `"using it across ChatGPT Gemini"`
+The decomposition engine extracts distinct topic components and clean search queries:
+1. `Topic A`: `"Memory Layer"` (Search Query: `"Memory Layer"`)
+2. `Topic B`: `"funding strategy"` (Search Query: `"funding strategy"`)
+3. `Topic C`: `"ChatGPT Gemini"` (Search Query: `"ChatGPT Gemini"`)
 
 Each topic component is searched independently against the indexed memory corpus using `HybridSearchEngine`.
 
-### 2.2 Parent vs Continuation Reranking & Metadata Inflation Protection
-- **Keyword Scoring Fix**: Modified [`SearchEngine`](file:///c:/Users/saive/OneDrive/Desktop/personal%20-memory-layer/app/search/search_engine.py) to calculate keyword counts primarily on the message content itself.
-- **Derived Continuation Protection**: Titles starting with `"Continued:"` or `"Composed:"` are prohibited from multiplying metadata keyword matches, ensuring V3-derived continuation conversations do not crowd out their original parent conversations.
-- **Original Parent Priority**: Candidate conversations are sorted such that original parent conversations (`is_derived = False`) are prioritized over derived continuations when relevances are comparable.
+### 2.2 Parent vs Continuation Overlap Suppression & Reranking
+- **Overlap & Provenance Deduplication**: If a candidate message is from a derived continuation (`is_derived = True`) and its underlying content or `source_message_id` overlaps with an original parent candidate (`is_derived = False`), the continuation candidate is suppressed. This guarantees that V3 continuations do not crowd out original parent conversations.
+- **Original Parent Priority**: Candidate conversations are sorted such that original parent conversations (`is_derived = False`) are prioritized before derived continuations when relevances are comparable.
 
-### 2.3 Diagnostic Metadata Engine
-Search results include a `_diagnostics` payload providing complete inspectability:
-- `query`: Raw user composition query string
-- `detected_topics`: Array of extracted sub-topic strings
-- `candidates_per_topic`: Map of candidate counts per topic
-- `total_raw_candidates`: Total candidates retrieved before deduplication
-- `duplicates_removed`: Number of duplicate message entries removed
-- `conversations_found`: Total conversations containing candidates
-- `providers_found`: Number of distinct AI providers (`ChatGPT`, `Gemini`, `Claude`)
+### 2.3 Comprehensive 9-Point Diagnostic Engine
+Search results include a detailed `_diagnostics` payload providing complete inspectability:
+1. `original_query`: `"Bring together everything about my Memory Layer, funding strategy, and using it across ChatGPT/Gemini."`
+2. `detected_topics`: `["Memory Layer", "funding strategy", "ChatGPT Gemini"]`
+3. `search_queries`: `{"Memory Layer": "Memory Layer", "funding strategy": "funding strategy", "ChatGPT Gemini": "ChatGPT Gemini"}`
+4. `candidates_per_topic`: `{"Memory Layer": 6, "funding strategy": 4, "ChatGPT Gemini": 4}`
+5. `top_candidates_per_topic`: Summaries of top 3 candidates per topic.
+6. `total_raw_candidates`: Total raw candidate count across all sub-topic searches (14).
+7. `final_merged_candidates`: Count of unique candidates in the final candidate pool (12).
+8. `duplicates_removed`: Count of duplicate message entries removed (3).
+9. `parent_continuation_deduped`: Count of continuation messages suppressed due to parent overlap (1).
+10. `diversity_reranking_decisions`: Prioritized original parent conversations and allocated candidates across 3 topic groups.
 
 ---
 
@@ -77,6 +78,6 @@ Search results include a `_diagnostics` payload providing complete inspectabilit
 
 ## 4. Test Verification Summary
 
-- **Baseline Tests**: 40 / 40 Passed.
-- **Version 4 Composition Tests**: 16 / 16 Passed.
-- **Total Regression Suite**: **56 / 56 Passed** (`Ran 56 tests in 1416.500s — OK`).
+- **Baseline Tests**: 56 / 56 Passed.
+- **V5A Foundation Tests**: 10 / 10 Passed.
+- **Total Regression Suite**: **66 / 66 Passed** (`Ran 66 tests in 87.717s — OK`).

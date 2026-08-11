@@ -164,3 +164,40 @@ class ComposedContext:
             "source_providers": self.source_providers,
             "messages": [c.to_dict() for c in self.selected_candidates],
         }
+
+
+@dataclass
+class PortableContextPackage:
+    """
+    V5A — Provider-Independent Versioned Portable Context Package.
+    Establishes the clean contract between V4 Context Composition and V5 AI Destinations.
+    """
+    package_id: str
+    title: str
+    topic: str
+    context_text: str
+    source_conversations: List[Dict[str, str]] = field(default_factory=list)
+    source_providers: Dict[str, int] = field(default_factory=dict)
+    messages: List[Dict[str, Any]] = field(default_factory=list)
+    provenance: List[Dict[str, Any]] = field(default_factory=list)
+    schema_version: str = "1.0"
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "package_id": self.package_id,
+            "title": self.title,
+            "topic": self.topic,
+            "created_at": self.created_at,
+            "total_messages": len(self.messages),
+            "source_conversations": self.source_conversations,
+            "source_providers": self.source_providers,
+            "context_text": self.context_text,
+            "messages": self.messages,
+            "provenance": self.provenance,
+        }
+
+    def to_json(self, indent: int = 2) -> str:
+        import json
+        return json.dumps(self.to_dict(), indent=indent)

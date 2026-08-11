@@ -78,7 +78,12 @@ class NeuralEmbeddingEncoder:
                 pass
             from sentence_transformers import SentenceTransformer
             logger.info(f"Loading SentenceTransformer model '{self.model_name}' into memory...")
-            self.model = SentenceTransformer(self.model_name, device="cpu")
+            try:
+                # Prefer locally cached model weights to avoid HuggingFace Hub network hiccups
+                self.model = SentenceTransformer(self.model_name, device="cpu", local_files_only=True)
+            except Exception:
+                # Fallback if local_files_only is unsupported or cache is fresh
+                self.model = SentenceTransformer(self.model_name, device="cpu")
 
     def encode(self, text: str) -> List[float]:
         """Encodes text string into a 384-dimensional normalized float list."""

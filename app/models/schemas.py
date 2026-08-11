@@ -81,3 +81,86 @@ class Conversation:
             "description": self.description,
             "messages": [m.to_dict() for m in self.messages],
         }
+
+
+@dataclass
+class ContextCandidate:
+    """
+    Represents a candidate message retrieved during multi-topic context search.
+    """
+    message_id: str
+    conversation_id: str
+    conversation_title: str
+    source: str
+    role: str
+    content: str
+    message_index: int
+    relevance_score: int
+    timestamp: Optional[str] = None
+    topic_association: Optional[str] = None
+    raw_semantic_score: float = 0.0
+    keyword_score: int = 0
+    is_derived: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "message_id": self.message_id,
+            "conversation_id": self.conversation_id,
+            "conversation_title": self.conversation_title,
+            "source": self.source,
+            "role": self.role,
+            "content": self.content,
+            "message_index": self.message_index,
+            "relevance_score": self.relevance_score,
+            "timestamp": self.timestamp,
+            "topic_association": self.topic_association,
+            "raw_semantic_score": self.raw_semantic_score,
+            "keyword_score": self.keyword_score,
+            "is_derived": self.is_derived,
+        }
+
+
+@dataclass
+class ComposedContext:
+    """
+    Represents a package of selected, ordered context blocks derived from multiple source conversations.
+    """
+    composition_id: str
+    title: str
+    query: str
+    selected_candidates: List[ContextCandidate] = field(default_factory=list)
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    @property
+    def source_conversations(self) -> List[Dict[str, str]]:
+        unique = {}
+        for c in self.selected_candidates:
+            if c.conversation_id not in unique:
+                unique[c.conversation_id] = {
+                    "id": c.conversation_id,
+                    "title": c.conversation_title,
+                    "source": c.source,
+                }
+        return list(unique.values())
+
+    @property
+    def source_providers(self) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for c in self.selected_candidates:
+            counts[c.source] = counts.get(c.source, 0) + 1
+        return counts
+
+    def export(self) -> Dict[str, Any]:
+        """
+        Export provider-independent context payload structure for future AI provider destinations (Version 5).
+        """
+        return {
+            "composition_id": self.composition_id,
+            "title": self.title,
+            "composition_query": self.query,
+            "created_at": self.created_at,
+            "total_messages": len(self.selected_candidates),
+            "source_conversations": self.source_conversations,
+            "source_providers": self.source_providers,
+            "messages": [c.to_dict() for c in self.selected_candidates],
+        }

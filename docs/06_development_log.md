@@ -85,3 +85,27 @@
 - **Automated Tests**:
   - Created `tests/test_version3_features.py` (6 new tests).
   - Executed complete regression suite: **40 / 40 tests PASSED**.
+
+---
+
+## Log Entry 7: Version 4 — 🧩 Compose Context & Multi-Topic Retrieval System Fixes
+- **Problem Solved & Retrieval Fixes**:
+  - Multi-topic queries like `"Bring together everything about my Memory Layer, funding strategy, and using it across ChatGPT/Gemini."` initially suffered from single-clause dominance and V3 continuation title keyword inflation.
+  - Multi-Topic Query Decomposition: `ContextComposer.decompose_query()` splits complex prompts into distinct sub-topics and searches each independently against the indexed memory corpus.
+  - Parent vs Continuation Reranking: Fixed `SearchEngine` keyword score calculation to count keywords on message content instead of concatenated metadata strings, preventing derived continuations (`Continued:...`) from crowding out parent conversations.
+  - Diagnostics Metadata: Implemented `_diagnostics` payload tracking query, detected sub-topics, per-topic candidate counts, raw semantic scores, keyword scores, and deduplication stats.
+- **Context Composition Engine (`ContextComposer`)**:
+  - Multi-topic hybrid search groups candidates by source conversation and AI provider.
+  - Selection, deselection, reordering (↑/↓/✕), and preview generation.
+  - Multi-parent relationships: Derived composed chat links back to each parent conversation via `relationship_type = 'context_composition'`.
+  - Provenance & Immutability: `source_conversation_id` and `source_message_id` references preserved. Source data remains 100% untouched.
+  - Destination Architecture: Implemented `ComposedContext.export()` for future Version 5 AI destination handoffs.
+- **Streamlit UI**:
+  - Added `🧩 Compose Context` navigation view to `app/main.py`.
+  - Step 1: Multi-topic search input & grouped candidate checkboxes.
+  - Step 2: Expandable **🔍 View Multi-Topic Diagnostics & Ranking Breakdown** panel.
+  - Step 3: Interactive context preview with Move Up (↑), Move Down (↓), and Remove (✕) controls.
+  - Step 4: Composed chat creation & toast notification.
+- **Automated Tests & Regression Suite**:
+  - Created `tests/test_version4_composition.py` (16 tests including multi-topic decomposition, candidate deduplication, and parent vs continuation reranking).
+  - Executed full regression test suite: **56 / 56 tests PASSED** (`Ran 56 tests in 1416.500s — OK`).

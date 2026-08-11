@@ -148,12 +148,18 @@ class SearchEngine:
             desc = row["conv_desc"] or ""
             tags_val = row["conv_tags"] or ""
 
-            # Calculate match relevance score based on keyword frequency across message & metadata
+            # Calculate match relevance score based primarily on message content
+            content_lower = content.lower()
+            metadata_text = f"{title} {category_val} {desc} {tags_val}".lower()
+            is_derived_title = title.startswith("Continued:") or title.startswith("Composed:")
+
             score = 0
-            text_to_search = f"{content} {title} {category_val} {desc} {tags_val}".lower()
             for kw in keywords:
-                if kw in text_to_search:
-                    score += text_to_search.count(kw)
+                content_count = content_lower.count(kw)
+                score += content_count
+                # Metadata bonus: +1 max per keyword (suppressed for derived continuation titles to prevent crowding out parent chats)
+                if kw in metadata_text and not is_derived_title:
+                    score += 1
 
             if score > 0:
                 snippet = self._generate_snippet(content, keywords)

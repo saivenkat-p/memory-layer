@@ -122,11 +122,12 @@ st.markdown("""
 from app.services.bulk_import import BulkImportEngine
 from app.search.find_here import FindHereEngine
 from app.services.topic_extractor import TopicExtractionEngine
+from app.services.context_composer import ContextComposer
 
 
 @st.cache_resource
 def get_services():
-    """Initializes singletons for Database, Repository, HybridSearchEngine, Assistant, BulkImportEngine, FindHereEngine, and TopicExtractionEngine."""
+    """Initializes singletons for Database, Repository, HybridSearchEngine, Assistant, BulkImportEngine, FindHereEngine, TopicExtractionEngine, and ContextComposer."""
     db_path = os.path.join("data", "memory.db")
     db = Database(db_path)
     repo = ConversationRepository(db)
@@ -135,17 +136,18 @@ def get_services():
     bulk_engine = BulkImportEngine(repo)
     find_here_engine = FindHereEngine(repo)
     topic_extractor = TopicExtractionEngine(repo)
-    return repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor
+    composer = ContextComposer(repo, search_engine)
+    return repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor, composer
 
 
 try:
-    repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor = get_services()
+    repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor, composer = get_services()
     if not hasattr(search_engine.semantic_engine.encoder, "model") or search_engine.semantic_engine.encoder.model is None:
         st.cache_resource.clear()
-        repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor = get_services()
+        repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor, composer = get_services()
 except Exception:
     st.cache_resource.clear()
-    repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor = get_services()
+    repo, search_engine, assistant, bulk_engine, find_here_engine, topic_extractor, composer = get_services()
 
 
 # Sidebar Navigation
@@ -159,6 +161,7 @@ nav_option = st.sidebar.radio(
         "📊 Dashboard",
         "📥 Import History",
         "💬 Conversations",
+        "🧩 Compose Context",
         "🔍 Search Memory",
         "🤖 Ask My Memory",
         "🏷️ Categories & Tags",
@@ -467,6 +470,164 @@ elif nav_option == "💬 Conversations":
                 for msg in conv.messages:
                     role_class = "chat-user" if msg.role == "user" else "chat-assistant"
                     st.markdown(f'<div class="{role_class}"><b>Msg #{msg.index} {msg.role.title()}:</b> {msg.content}</div>', unsafe_allow_html=True)
+
+
+# -----------------------------------------------------------------------------
+# VIEW 4: COMPOSE CONTEXT (MULTI-TOPIC / MULTI-CONVERSATION CONTEXT COMPOSITION)
+# -----------------------------------------------------------------------------
+elif nav_option == "🧩 Compose Context":
+    st.markdown('<div class="main-header">🧩 Compose Context</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="sub-header">Discover, select, reorder, and combine relevant context blocks from multiple conversations across AI platforms into a new focused chat.</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.info("💡 **Enter what you want to bring together.** The engine will search your complete indexed history across all AI providers, allowing you to select and reorder the exact context blocks you want.")
+
+    comp_query = st.text_input(
+        "Describe what context you want to bring together",
+        key="compose_query_input",
+        placeholder="e.g. Memory Layer, funding strategy, and using it across ChatGPT/Gemini",
+    )
+
+    col_btn1, col_btn2 = st.columns([2, 3])
+    with col_btn1:
+        if st.button("🔍 Search & Group Relevant Context", type="primary", key="compose_search_btn"):
+            if comp_query:
+                with st.spinner("Searching multi-topic context across memory..."):
+                    grouped_results = composer.search_context(comp_query, limit=50)
+                    st.session_state["compose_grouped_results"] = grouped_results
+                    init_selected = []
+                    for cid, grp in grouped_results.items():
+                        for cand in grp["candidates"]:
+                            init_selected.append(cand)
+                    st.session_state["compose_selected_candidates"] = init_selected
+
+    grouped = st.session_state.get("compose_grouped_results", {})
+    selected_cands = st.session_state.get("compose_selected_candidates", [])
+
+    if grouped:
+        diagnostics = grouped.get("_diagnostics")
+        conv_groups = {k: v for k, v in grouped.items() if k != "_diagnostics"}
+
+        st.divider()
+
+        # Multi-Topic Diagnostics Expander
+        if diagnostics:
+            with st.expander("🔍 View Multi-Topic Diagnostics & Ranking Breakdown", expanded=False):
+                st.markdown(f"**Composition Query:** `{diagnostics['query']}`")
+                st.markdown(f"**Detected Sub-Topics ({len(diagnostics['detected_topics'])}):** {', '.join(f'`{t}`' for t in diagnostics['detected_topics'])}")
+                
+                diag_c1, diag_c2, diag_c3, diag_c4 = st.columns(4)
+                with diag_c1:
+                    st.metric("Raw Candidates Found", diagnostics["total_raw_candidates"])
+                with diag_c2:
+                    st.metric("Duplicates Removed", diagnostics["duplicates_removed"])
+                with diag_c3:
+                    st.metric("Conversations Identified", diagnostics["conversations_found"])
+                with diag_c4:
+                    st.metric("AI Providers", diagnostics["providers_found"])
+
+                st.caption(f"Candidates per topic: {diagnostics['candidates_per_topic']}")
+
+        st.subheader("📊 Step 1: Select Context Candidates")
+
+        tot_cands = sum(len(grp["candidates"]) for grp in conv_groups.values())
+        tot_providers = len(set(grp["source"] for grp in conv_groups.values()))
+
+        st.markdown(f"Found **{tot_cands} candidate message(s)** across **{len(conv_groups)} conversation(s)** and **{tot_providers} AI provider(s)**:")
+
+        col_sel1, col_sel2 = st.columns(2)
+        with col_sel1:
+            if st.button("☑️ Select All Candidates", key="select_all_btn"):
+                all_cands = []
+                for grp in conv_groups.values():
+                    all_cands.extend(grp["candidates"])
+                st.session_state["compose_selected_candidates"] = all_cands
+                st.rerun()
+        with col_sel2:
+            if st.button("☐ Clear Selection", key="clear_all_btn"):
+                st.session_state["compose_selected_candidates"] = []
+                st.rerun()
+
+        # Render candidates grouped by Conversation
+        current_selected_ids = {c.message_id for c in selected_cands}
+        new_selected_map = {}
+
+        for cid, grp in conv_groups.items():
+            badge = " [V3 Continuation]" if grp.get("is_derived") else " [Original Parent]"
+            with st.expander(f"💬 {grp['title']}{badge} | Source: **{grp['source']}** | Max Relevance: **{grp['max_score']}%**", expanded=True):
+                for cand in grp["candidates"]:
+                    is_checked = cand.message_id in current_selected_ids
+                    label = f"Msg #{cand.message_index} ({cand.role.title()}) [Topic: {cand.topic_association} | Raw Sem: {cand.raw_semantic_score} | Score: {cand.relevance_score}%]: {cand.content[:120]}..."
+                    val = st.checkbox(label, value=is_checked, key=f"chk_comp_{cand.message_id}")
+                    if val:
+                        new_selected_map[cand.message_id] = cand
+
+        # Update selected candidates list preserving order
+        ordered_selected = [c for c in selected_cands if c.message_id in new_selected_map]
+        for mid, cand in new_selected_map.items():
+            if not any(c.message_id == mid for c in ordered_selected):
+                ordered_selected.append(cand)
+        st.session_state["compose_selected_candidates"] = ordered_selected
+
+        # Step 2: Context Preview & Reordering
+        st.divider()
+        st.subheader("🧩 Step 2: Context Preview & Reordering")
+
+        active_preview = composer.build_context_preview(ordered_selected, query=comp_query)
+        st.markdown(f"Selected **{len(active_preview.selected_candidates)} message(s)** from **{len(active_preview.source_conversations)} conversation(s)** across **{len(active_preview.source_providers)} provider(s)**:")
+
+        if active_preview.source_providers:
+            prov_str = " | ".join(f"**{p}**: {c} msg(s)" for p, c in active_preview.source_providers.items())
+            st.caption(f"Provider breakdown: {prov_str}")
+
+        if not active_preview.selected_candidates:
+            st.warning("No messages selected. Select at least one candidate message above to form your composed context.")
+        else:
+            cands_to_display = list(active_preview.selected_candidates)
+            for idx, cand in enumerate(cands_to_display):
+                c_col1, c_col2, c_col3, c_col4 = st.columns([6, 1, 1, 1])
+                with c_col1:
+                    role_icon = "👤" if cand.role == "user" else "🤖"
+                    st.markdown(f"**#{idx+1} [{cand.source}] {cand.conversation_title} (Msg #{cand.message_index})**")
+                    st.markdown(f'<div class="debug-box"><b>{role_icon} {cand.role.title()}:</b> {cand.content}</div>', unsafe_allow_html=True)
+                with c_col2:
+                    if idx > 0 and st.button("↑", key=f"up_{cand.message_id}_{idx}"):
+                        cands_to_display[idx], cands_to_display[idx-1] = cands_to_display[idx-1], cands_to_display[idx]
+                        st.session_state["compose_selected_candidates"] = cands_to_display
+                        st.rerun()
+                with c_col3:
+                    if idx < len(cands_to_display) - 1 and st.button("↓", key=f"dn_{cand.message_id}_{idx}"):
+                        cands_to_display[idx], cands_to_display[idx+1] = cands_to_display[idx+1], cands_to_display[idx]
+                        st.session_state["compose_selected_candidates"] = cands_to_display
+                        st.rerun()
+                with c_col4:
+                    if st.button("✕", key=f"rm_{cand.message_id}_{idx}"):
+                        cands_to_display.pop(idx)
+                        st.session_state["compose_selected_candidates"] = cands_to_display
+                        st.rerun()
+
+            st.divider()
+            st.subheader("🚀 Step 3: Create Composed Conversation")
+
+            default_title = f"Composed: {comp_query[:35].title()}" if comp_query else "Composed: Context Strategy"
+            comp_title_input = st.text_input("Composed Conversation Title", value=default_title, key="comp_title_input")
+
+            if st.button("🧩 Create Composed Chat", type="primary", key="create_comp_chat_btn"):
+                if cands_to_display and comp_title_input:
+                    new_conv, comp_ctx = composer.create_composed_conversation(
+                        title=comp_title_input,
+                        query=comp_query,
+                        selected_candidates=cands_to_display,
+                    )
+                    st.toast(f"🎉 Created composed conversation '{new_conv.title}'!", icon="🧩")
+                    st.success(f"Created derived conversation **'{new_conv.title}'** containing {new_conv.message_count} messages from {len(comp_ctx.source_conversations)} source conversation(s)!")
+                    if "compose_grouped_results" in st.session_state:
+                        del st.session_state["compose_grouped_results"]
+                    if "compose_selected_candidates" in st.session_state:
+                        del st.session_state["compose_selected_candidates"]
+                    st.rerun()
 
 
 # -----------------------------------------------------------------------------

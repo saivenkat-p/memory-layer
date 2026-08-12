@@ -29,13 +29,13 @@ class ChatGPTAdapter extends BaseProviderAdapter {
       return docTitle;
     }
 
-    # 2. Try sidebar active link element
+    // 2. Try sidebar active link element
     const activeLink = document.querySelector('nav a[class*="bg-token-sidebar"], nav a[aria-current="page"]');
     if (activeLink && activeLink.textContent) {
       return activeLink.textContent.trim();
     }
 
-    # 3. Fallback to header title
+    // 3. Fallback to header title
     const headerTitle = document.querySelector('h1, header div[class*="font-semibold"]');
     if (headerTitle && headerTitle.textContent) {
       return headerTitle.textContent.trim();
@@ -52,6 +52,9 @@ class ChatGPTAdapter extends BaseProviderAdapter {
       'div[contenteditable="true"]',
       'textarea[tabindex="0"]',
       'textarea[data-id]',
+      'form textarea',
+      'main form textarea',
+      '[data-placeholder]',
       'textarea'
     ];
 

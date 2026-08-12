@@ -4,13 +4,18 @@
 
 class ContextManager {
   constructor() {
-    this.isEnabled = false;
+    this.isEnabled = true;
   }
 
   async loadActivationState() {
     return new Promise((resolve) => {
       chrome.storage.local.get(["memory_layer_enabled"], (result) => {
-        this.isEnabled = !!result.memory_layer_enabled;
+        if (result.memory_layer_enabled === undefined) {
+          this.isEnabled = true;
+          chrome.storage.local.set({ memory_layer_enabled: true });
+        } else {
+          this.isEnabled = !!result.memory_layer_enabled;
+        }
         resolve(this.isEnabled);
       });
     });

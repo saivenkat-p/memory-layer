@@ -18,6 +18,13 @@
   margin: 6px 0;
 }
 
+.memory-layer-floating-btn.fixed-position {
+  position: fixed !important;
+  bottom: 24px !important;
+  right: 24px !important;
+  z-index: 999999 !important;
+}
+
 .memory-layer-floating-btn:hover {
   background: linear-gradient(135deg, #0284c7, #0369a1);
   color: #ffffff;

@@ -1,18 +1,19 @@
 /**
- * Content Script for Personal AI Memory Layer Extension (Milestone V6.0 Skeleton & V6.1 Target).
+ * Content Script for Personal AI Memory Layer Extension (Milestone V6.1 ChatGPT Target).
  *
- * Responsibilities:
+ * Diagnostic & Mounting Enhancements:
  * 1. Checks user permission / activation gate (`chrome.storage.local`).
  * 2. Resolves active provider adapter (`ChatGPTAdapter`, `GeminiAdapter`, `ClaudeAdapter`).
- * 3. Injects floating `🧠 Memory Layer` trigger near AI composer.
- * 4. Renders the in-page Search & Context Overlay modal.
- * 5. Supports "Search This Conversation" (distinguishing DOM visible messages vs backend history).
- * 6. Supports "Search All AI Memory" global search.
- * 7. Safely inserts selected context into prompt composer (INSERT ONLY, NEVER auto-send).
+ * 3. Injects floating `🧠 Memory Layer` trigger button on page load (independent of API status).
+ * 4. Uses MutationObserver + polling to maintain button attachment across SPA DOM updates.
+ * 5. Renders in-page Search & Context Overlay modal.
+ * 6. Supports "Search This Conversation" (DOM visible messages vs backend indexed history).
+ * 7. Supports "Search All AI Memory" global search.
+ * 8. Safely inserts selected context into prompt composer (INSERT ONLY, NEVER auto-send).
  */
 
 (async function () {
-  console.log("[Memory Layer] Content script injected.");
+  console.log("[Memory Layer] Content script starting initialization on page:", window.location.href);
 
   const client = window.MemoryLayerClientInstance || new MemoryLayerClient();
   const manager = window.ContextManagerInstance || new ContextManager();
@@ -32,13 +33,15 @@
 
   console.log(`[Memory Layer] Matched provider adapter: ${currentAdapter.getProviderName()} (Supported: ${currentAdapter.isSupported()})`);
 
-  // 2. Load Activation State
+  // 2. Load Activation State (Defaults to true on first install)
   let isEnabled = await manager.loadActivationState();
+  console.log(`[Memory Layer] Activation state loaded: isEnabled = ${isEnabled}`);
 
   // Listen for activation toggle messages from popup
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "MEMORY_LAYER_TOGGLED") {
       isEnabled = msg.enabled;
+      console.log(`[Memory Layer] Received toggle update: isEnabled = ${isEnabled}`);
       if (isEnabled) {
         initMemoryLayerUI();
       } else {
@@ -60,23 +63,41 @@
 
   function initMemoryLayerUI() {
     removeMemoryLayerUI();
-    console.log("[Memory Layer] Initializing UI elements...");
+    console.log("[Memory Layer] Initializing UI elements & DOM observer...");
 
-    // Periodically inspect DOM to attach trigger near composer if element loads late
+    // Immediate attachment attempt
+    ensureButtonAttached();
+
+    // 1. Polling Fallback (500ms)
     const interval = setInterval(() => {
       if (!isEnabled) {
         clearInterval(interval);
         return;
       }
+      ensureButtonAttached();
+    }, 500);
 
-      const composer = currentAdapter.getComposer();
-      if (composer && !document.getElementById("memory-layer-trigger-btn")) {
-        injectTriggerButton(composer);
+    // 2. DOM MutationObserver
+    const observer = new MutationObserver(() => {
+      if (isEnabled) {
+        ensureButtonAttached();
       }
-    }, 1000);
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  function ensureButtonAttached() {
+    if (!isEnabled) return;
+    if (document.getElementById("memory-layer-trigger-btn")) return;
+
+    const composer = currentAdapter.getComposer();
+    injectTriggerButton(composer);
   }
 
   function injectTriggerButton(composer) {
+    if (document.getElementById("memory-layer-trigger-btn")) return;
+
     const btn = document.createElement("button");
     btn.id = "memory-layer-trigger-btn";
     btn.className = "memory-layer-floating-btn";
@@ -87,16 +108,26 @@
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      console.log("[Memory Layer] Trigger button clicked.");
       toggleOverlayModal();
     });
 
-    // Try injecting before composer container
-    const parent = composer.parentElement;
-    if (parent) {
-      parent.appendChild(btn);
-    } else {
-      document.body.appendChild(btn);
+    // Attachment Strategy:
+    // If composer is found, try injecting before or inside composer parent wrapper.
+    // If no composer container found yet, attach directly to document.body (fixed bottom-right).
+    if (composer) {
+      const parentForm = composer.closest("form") || composer.parentElement;
+      if (parentForm) {
+        parentForm.appendChild(btn);
+        console.log("[Memory Layer] Button attached near composer form.");
+        return;
+      }
     }
+
+    // Fixed Fallback Attachment
+    btn.classList.add("fixed-position");
+    document.body.appendChild(btn);
+    console.log("[Memory Layer] Button attached to document.body (fixed position fallback).");
   }
 
   function toggleOverlayModal() {
@@ -105,6 +136,8 @@
       overlay.classList.toggle("hidden");
       return;
     }
+
+    console.log("[Memory Layer] Creating in-page overlay drawer...");
 
     // Build Overlay Modal
     overlay = document.createElement("div");
@@ -197,15 +230,30 @@
         const domMsgs = currentAdapter.readVisibleMessages();
         const res = await client.searchGlobal(q, 10); // Search backend with query
 
-        renderSearchResults(res.results || [], domMsgs, q);
+        renderSearchResults(res, domMsgs, q);
       } else {
         const res = await client.searchGlobal(q, 15);
-        renderSearchResults(res.results || [], [], q);
+        renderSearchResults(res, [], q);
       }
     }
 
-    function renderSearchResults(backendResults, domMessages, queryText) {
+    function renderSearchResults(apiResponse, domMessages, queryText) {
       const container = document.getElementById("ml-results-list");
+
+      if (apiResponse && apiResponse.offline) {
+        container.innerHTML = `
+          <div class="memory-layer-placeholder error-text">
+            ⚠️ <strong>Memory Layer Backend Offline</strong><br>
+            Could not connect to <code>http://127.0.0.1:8000</code>.<br>
+            Launch the backend server using:<br>
+            <code>python -m app.api.server</code>
+          </div>
+        `;
+        return;
+      }
+
+      const backendResults = (apiResponse && apiResponse.results) ? apiResponse.results : [];
+
       if (!backendResults.length && !domMessages.length) {
         container.innerHTML = `<div class="memory-layer-placeholder">No matching memory items found for "${queryText}".</div>`;
         return;

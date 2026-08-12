@@ -9,6 +9,7 @@ from typing import List, Optional, Dict, Tuple
 from app.repositories.conversation_repository import ConversationRepository
 from app.search.search_engine import SearchEngine, SearchResult, STOPWORDS
 from app.search.semantic_search import SemanticSearchEngine
+from app.utils.text_normalizer import strip_injected_context
 
 
 class HybridSearchEngine:
@@ -51,7 +52,9 @@ class HybridSearchEngine:
         if not query or not query.strip():
             return []
 
-        clean_query = query.strip()
+        clean_query = strip_injected_context(query).strip()
+        if not clean_query:
+            return []
         words = [w.lower() for w in clean_query.split() if len(w) > 1 and w.lower() not in STOPWORDS]
         if not words:
             words = [w.lower() for w in clean_query.split() if len(w) > 1]
@@ -122,11 +125,19 @@ class HybridSearchEngine:
             # Neural Cosine Semantic Score [0.0, 1.0]
             sem_score = semantic_map.get(msg_id, 0.0)
 
-            # Combined Hybrid Score Formula
-            final_score = (self.semantic_weight * sem_score) + (self.keyword_weight * kw_norm)
+            # Combined Hybrid Score Formula with Adaptive Candidate Fusion (V6.4-A)
+            # Candidates with keyword evidence use hybrid score weighting.
+            # Pure semantic candidates (kw_norm == 0) use raw cosine similarity
+            # to prevent artificial score dampening from missing keywords.
+            if kw_norm > 0:
+                final_score = (self.semantic_weight * sem_score) + (self.keyword_weight * kw_norm)
+                threshold = self.min_relevance_threshold
+            else:
+                final_score = sem_score
+                threshold = 0.38  # Adaptive semantic-only threshold
 
             # Apply Relevance Thresholding
-            if final_score >= self.min_relevance_threshold:
+            if final_score >= threshold:
                 res.score = int(round(final_score * 100))
                 hybrid_results.append(res)
 

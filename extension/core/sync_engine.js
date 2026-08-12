@@ -16,6 +16,7 @@ class ConversationSyncEngine {
     this.manager = window.ContextManagerInstance || new ContextManager();
     this.currentAdapter = null;
     this.isAutoSyncEnabled = false;
+    this.isObserverStarted = false;
     this.debounceTimer = null;
     this.lastSyncedHash = "";
     this.lastObservedPath = "";
@@ -32,6 +33,7 @@ class ConversationSyncEngine {
         this.isAutoSyncEnabled = !!msg.autoSyncEnabled;
         console.log(`[SyncEngine] Auto-sync setting updated: ${this.isAutoSyncEnabled}`);
         if (this.isAutoSyncEnabled) {
+          this.startDOMObserver();
           this.triggerDebouncedSync();
         }
       }
@@ -43,6 +45,8 @@ class ConversationSyncEngine {
   }
 
   startDOMObserver() {
+    if (this.isObserverStarted) return;
+    this.isObserverStarted = true;
     this.lastObservedPath = window.location.pathname;
 
     // 1. Initial sync attempt
@@ -123,9 +127,9 @@ class ConversationSyncEngine {
   }
 
   isAssistantStreaming() {
-    // Check common streaming indicators across ChatGPT & Gemini
+    // Check precise streaming indicators across ChatGPT & Gemini
     const streamingEl = document.querySelector(
-      '[data-is-streaming="true"], .result-streaming, .streaming, .text-output.streaming, button[aria-label*="Stop"]'
+      '[data-is-streaming="true"], .result-streaming, button[aria-label="Stop generating"], button[aria-label="Stop response"], [data-testid="stop-button"]'
     );
     return !!streamingEl;
   }

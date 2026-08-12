@@ -51,6 +51,7 @@ import numpy as np
 
 from app.repositories.database import Database
 from app.repositories.conversation_repository import ConversationRepository
+from app.utils.text_normalizer import strip_injected_context
 
 ACTIVE_MODEL_NAME = "all-MiniLM-L6-v2"
 EXPECTED_DIMENSION = 384
@@ -166,7 +167,7 @@ class SemanticSearchEngine:
 
     def index_conversation_messages(self, conversation_id: str) -> int:
         """
-        Generates and stores 384-dimensional dense neural embeddings for all messages in a conversation.
+        Generates and stores 384-dimensional dense neural embeddings using sliding turn windows (User + Assistant).
         Returns the number of messages successfully indexed.
         """
         conv = self.repo.get_conversation(conversation_id)
@@ -174,14 +175,30 @@ class SemanticSearchEngine:
             return 0
 
         indexed_count = 0
+        total_msgs = len(conv.messages)
+
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
             now = datetime.now(timezone.utc).isoformat()
 
-            for msg in conv.messages:
-                if not msg.content or not msg.content.strip():
+            for idx, msg in enumerate(conv.messages):
+                raw_content = msg.content or ""
+                clean_content = strip_injected_context(raw_content)
+                if not clean_content:
                     continue
-                context_text = f"{conv.title}. {conv.category or ''} {' '.join(conv.tags)}. {msg.content}"
+
+                # Build Turn Window Context (User + Assistant pair where available)
+                role_clean = str(msg.role).lower().strip()
+                if role_clean == "user" and idx + 1 < total_msgs and str(conv.messages[idx + 1].role).lower().strip() == "assistant":
+                    next_clean = strip_injected_context(conv.messages[idx + 1].content)
+                    turn_text = f"User: {clean_content}\nAssistant: {next_clean}"
+                elif role_clean == "assistant" and idx - 1 >= 0 and str(conv.messages[idx - 1].role).lower().strip() == "user":
+                    prev_clean = strip_injected_context(conv.messages[idx - 1].content)
+                    turn_text = f"User: {prev_clean}\nAssistant: {clean_content}"
+                else:
+                    turn_text = f"{msg.role.capitalize()}: {clean_content}"
+
+                context_text = f"{conv.title}. {conv.category or ''} {' '.join(conv.tags)}. {turn_text}"
                 vector = self.generate_embedding(context_text)
 
                 if not self._validate_embedding(vector):

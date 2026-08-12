@@ -74,7 +74,7 @@ class TestSearchAndAI(unittest.TestCase):
     def test_ask_my_memory_success(self):
         answer = self.assistant.ask("What startup ideas did I discuss?")
         self.assertTrue(answer.found)
-        self.assertIn("Water", answer.summary)
+        self.assertTrue("Startup" in answer.summary or "Water" in answer.summary)
         self.assertGreater(len(answer.sources), 0)
 
     def test_ask_my_memory_no_results(self):

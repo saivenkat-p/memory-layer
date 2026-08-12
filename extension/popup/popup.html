@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Personal AI Memory Layer</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <div class="logo">🧠 Memory Layer</div>
+    <div id="statusBadge" class="badge checking">Checking...</div>
+  </div>
+
+  <div class="card">
+    <h3>Privacy & Activation Gate</h3>
+    <p class="description">
+      Decide whether to enable Memory Layer tools on AI chat websites (ChatGPT, Gemini, Claude).
+    </p>
+
+    <div class="toggle-row">
+      <span class="toggle-label">Enable Memory Layer on AI sites</span>
+      <label class="switch">
+        <input type="checkbox" id="activationToggle">
+        <span class="slider round"></span>
+      </label>
+    </div>
+
+    <div id="activationStatusText" class="status-info">
+      Memory Layer is currently <strong>Disabled</strong>.
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Local API Backend</h3>
+    <div class="backend-info">
+      <div>Server: <code>http://127.0.0.1:8000/api/v1</code></div>
+      <div id="backendDetail" class="text-subtle">Testing connection...</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span>Personal AI Memory Layer v6.0</span>
+  </div>
+
+  <script src="../core/memory_client.js"></script>
+  <script src="../core/context_manager.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Personal AI Memory Layer",
+  "version": "6.0.0",
+  "description": "Universal in-browser AI Memory Layer providing search, context composition, and prompt insertion on ChatGPT, Gemini, and Claude.",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*",
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://gemini.google.com/*",
+    "https://claude.ai/*"
+  ],
+  "background": {
+    "service_worker": "background/service_worker.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Personal AI Memory Layer"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*",
+        "https://claude.ai/*"
+      ],
+      "js": [
+        "core/memory_client.js",
+        "core/context_manager.js",
+        "core/injection.js",
+        "providers/base.js",
+        "providers/chatgpt.js",
+        "providers/gemini.js",
+        "providers/claude.js",
+        "content/content.js"
+      ],
+      "css": [
+        "content/content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

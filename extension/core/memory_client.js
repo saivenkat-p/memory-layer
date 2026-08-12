@@ -61,7 +61,23 @@ class MemoryLayerClient {
       return { error: true, message: e.message };
     }
   }
+
+  async syncConversation(syncPayload) {
+    try {
+      const resp = await fetch(`${this.baseUrl}/conversations/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(syncPayload)
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return await resp.json();
+    } catch (e) {
+      console.error("[MemoryLayerClient] Conversation sync failed:", e);
+      return { error: true, message: e.message };
+    }
+  }
 }
 
 // Global instance attached to window for content script usage
 window.MemoryLayerClientInstance = new MemoryLayerClient();
+

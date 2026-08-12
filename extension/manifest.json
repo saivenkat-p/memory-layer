@@ -38,6 +38,7 @@
         "providers/chatgpt.js",
         "providers/gemini.js",
         "providers/claude.js",
+        "core/sync_engine.js",
         "content/content.js"
       ],
       "css": [

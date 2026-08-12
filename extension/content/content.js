@@ -33,6 +33,12 @@
 
   console.log(`[Memory Layer] Matched provider adapter: ${currentAdapter.getProviderName()} (Supported: ${currentAdapter.isSupported()})`);
 
+  // Initialize Opt-In Auto-Sync Engine (Milestone V6.2.x)
+  const syncEngine = window.ConversationSyncEngineInstance;
+  if (syncEngine) {
+    syncEngine.init(currentAdapter);
+  }
+
   // 2. Load Activation State (Defaults to true on first install)
   let isEnabled = await manager.loadActivationState();
   console.log(`[Memory Layer] Activation state loaded: isEnabled = ${isEnabled}`);

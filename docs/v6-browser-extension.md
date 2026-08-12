@@ -19,8 +19,8 @@ The extension acts strictly as the **user-facing product layer**, communicating 
 | **Search This Conversation (DOM vs History)** | **IMPLEMENTED** | Distinguishes webpage DOM messages vs backend history. |
 | **Search All AI Memory (Global Search)** | **IMPLEMENTED** | Searches complete indexed SQLite database. |
 | **Prompt Composer Insertion (INSERT ONLY)** | **IMPLEMENTED** | Inserts context into prompt box; NEVER auto-sends. |
-| **Gemini Adapter (`GeminiAdapter`)** | **PLANNED / STUB** | Structured adapter stub (V6.6 planned). |
-| **Claude Adapter (`ClaudeAdapter`)** | **PLANNED / STUB** | Structured adapter stub (V6.7 planned). |
+| **Gemini Adapter (`GeminiAdapter`)** | **IMPLEMENTED (Target V6.2)** | Active implementation for `gemini.google.com`. |
+| **Claude Adapter (`ClaudeAdapter`)** | **PLANNED / STUB** | Structured adapter stub (V6.3 planned). |
 
 ---
 

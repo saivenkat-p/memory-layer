@@ -25,7 +25,7 @@ from app.search.find_here import FindHereEngine
 from app.services.context_composer import ContextComposer
 from app.services.export_engine import LocalExportDestination
 from app.services.destination_adapters.registry import DestinationRegistry
-from app.models.schemas import PortableContextPackage
+from app.models.schemas import PortableContextPackage, Conversation, Message
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +226,62 @@ class MemoryLayerHTTPRequestHandler(BaseHTTPRequestHandler):
                     "external_id": result.external_id,
                     "error_code": result.error_code,
                     "response_payload": result.response_payload,
+                })
+
+            elif path == "/api/v1/conversations/sync":
+                provider = body.get("provider", "").strip()
+                conv_id_raw = body.get("conversation_id", "").strip()
+                title = body.get("title", "").strip()
+                msgs_raw = body.get("messages", [])
+
+                supported_providers = ["ChatGPT", "Gemini", "Claude", "Local Export"]
+                if not provider or provider not in supported_providers:
+                    self._send_error_response(400, f"Invalid or unsupported provider '{provider}'. Must be one of {supported_providers}.", "INVALID_PROVIDER")
+                    return
+
+                if not conv_id_raw or not title:
+                    self._send_error_response(400, "Fields 'conversation_id' and 'title' are required.", "INVALID_INPUT")
+                    return
+
+                if not isinstance(msgs_raw, list) or len(msgs_raw) == 0:
+                    self._send_error_response(400, "Field 'messages' must be a non-empty list.", "INVALID_INPUT")
+                    return
+
+                messages: List[Message] = []
+                for idx, m in enumerate(msgs_raw):
+                    if not isinstance(m, dict):
+                        continue
+                    role = str(m.get("role", "user")).lower().strip()
+                    if role not in ["user", "assistant", "system"]:
+                        role = "user"
+                    content = str(m.get("content", "")).strip()
+                    if not content:
+                        continue
+                    msg_idx = int(m.get("index", idx))
+                    msg_id = f"{conv_id_raw}_msg_{msg_idx}"
+                    messages.append(Message(
+                        id=msg_id,
+                        role=role,
+                        content=content,
+                        index=msg_idx
+                    ))
+
+                if not messages:
+                    self._send_error_response(400, "No valid message contents provided in payload.", "INVALID_INPUT")
+                    return
+
+                conv = Conversation(
+                    id=conv_id_raw,
+                    title=title,
+                    source=provider,
+                    messages=messages
+                )
+
+                saved_id = self.repo.save_conversation(conv)
+                self._send_json_response(200, {
+                    "success": True,
+                    "conversation_id": saved_id,
+                    "messages_synced": len(messages)
                 })
 
             else:

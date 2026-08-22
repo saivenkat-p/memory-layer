@@ -14,6 +14,7 @@ from app.models.schemas import Conversation, Message
 from app.repositories.conversation_repository import ConversationRepository
 from app.search.search_engine import SearchResult, STOPWORDS
 from app.search.semantic_search import SemanticSearchEngine
+from app.search.context_expander import ContextExpander
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +33,18 @@ class FindHereEngine:
     ):
         self.repo = repo or ConversationRepository()
         self.semantic_engine = SemanticSearchEngine(self.repo)
+        self.expander = ContextExpander(self.repo)
         self.semantic_weight = semantic_weight
         self.keyword_weight = keyword_weight
         self.min_relevance_threshold = min_relevance_threshold
 
     def search_in_conversation(
-        self, conversation_id: str, query: str, limit: int = 20
+        self,
+        conversation_id: str,
+        query: str,
+        limit: int = 20,
+        expand_context: bool = True,
+        expansion_strategy: str = "adaptive",
     ) -> List[SearchResult]:
         """
         Searches ONLY the currently selected conversation.
@@ -149,7 +156,14 @@ class FindHereEngine:
                 )
 
         results.sort(key=lambda r: r.score, reverse=True)
-        return results[:limit]
+        top_results = results[:limit]
+
+        # V6.4-C: Contextual Result Expansion (Post-Ranking Stage)
+        if expand_context and top_results:
+            top_results = self.expander.expand_results(top_results, strategy=expansion_strategy)
+
+        return top_results
+
 
     def _generate_snippet(self, text: str, terms: List[str], max_length: int = 180) -> str:
         if not text:

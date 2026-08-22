@@ -9,6 +9,7 @@ from typing import List, Optional, Dict, Tuple
 from app.repositories.conversation_repository import ConversationRepository
 from app.search.search_engine import SearchEngine, SearchResult, STOPWORDS
 from app.search.semantic_search import SemanticSearchEngine
+from app.search.context_expander import ContextExpander
 from app.utils.text_normalizer import strip_injected_context
 
 
@@ -34,6 +35,7 @@ class HybridSearchEngine:
         self.repo = repo or ConversationRepository()
         self.keyword_engine = SearchEngine(self.repo)
         self.semantic_engine = SemanticSearchEngine(self.repo)
+        self.expander = ContextExpander(self.repo)
         self.semantic_weight = semantic_weight
         self.keyword_weight = keyword_weight
         self.min_relevance_threshold = min_relevance_threshold
@@ -45,6 +47,8 @@ class HybridSearchEngine:
         source: Optional[str] = None,
         tag: Optional[str] = None,
         limit: int = 50,
+        expand_context: bool = True,
+        expansion_strategy: str = "adaptive",
     ) -> List[SearchResult]:
         """
         Executes Hybrid Search combining Lexical Matching and Neural Embedding Similarity.
@@ -143,4 +147,11 @@ class HybridSearchEngine:
 
         # Sort by Final Hybrid Score DESC
         hybrid_results.sort(key=lambda r: r.score, reverse=True)
-        return hybrid_results[:limit]
+        top_results = hybrid_results[:limit]
+
+        # V6.4-C: Contextual Result Expansion (Post-Ranking Stage)
+        if expand_context and top_results:
+            top_results = self.expander.expand_results(top_results, strategy=expansion_strategy)
+
+        return top_results
+

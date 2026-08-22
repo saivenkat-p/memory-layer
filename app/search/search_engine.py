@@ -38,6 +38,8 @@ class SearchResult:
     category: Optional[str] = None
     tags: List[str] = field(default_factory=list)
     score: int = 1
+    context_messages: List[Dict[str, Any]] = field(default_factory=list)
+    context_text: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -53,6 +55,8 @@ class SearchResult:
             "category": self.category,
             "tags": self.tags,
             "score": self.score,
+            "context_messages": self.context_messages,
+            "context_text": self.context_text,
         }
 
 

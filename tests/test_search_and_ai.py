@@ -7,6 +7,7 @@ from app.models.schemas import Conversation, Message
 from app.repositories.database import Database
 from app.repositories.conversation_repository import ConversationRepository
 from app.search.search_engine import SearchEngine
+from app.search.hybrid_search import HybridSearchEngine
 from app.ai.memory_assistant import AskMyMemoryAssistant
 
 
@@ -16,7 +17,7 @@ class TestSearchAndAI(unittest.TestCase):
         self.db = Database(":memory:")
         self.repo = ConversationRepository(self.db)
         self.search_engine = SearchEngine(self.repo)
-        self.assistant = AskMyMemoryAssistant()
+        self.assistant = AskMyMemoryAssistant(HybridSearchEngine(self.repo))
 
         # Seed test data
         c1 = Conversation(

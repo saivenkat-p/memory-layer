@@ -303,7 +303,7 @@
               </div>
               <div class="card-content">${escapeHtml(snippet)}</div>
               <div class="card-actions">
-                <button type="button" class="insert-btn" data-text="${escapeAttr(r.matched_content || snippet)}">📥 Insert into Prompt</button>
+                <button type="button" class="insert-btn" data-text="${escapeAttr(r.context_text || r.matched_content || snippet)}">📥 Insert into Prompt</button>
               </div>
             </div>
           `;

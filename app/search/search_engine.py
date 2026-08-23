@@ -152,18 +152,26 @@ class SearchEngine:
             desc = row["conv_desc"] or ""
             tags_val = row["conv_tags"] or ""
 
-            # Calculate match relevance score based primarily on message content
+            # Calculate match relevance score using BM25 term-frequency saturation and length normalization
             content_lower = content.lower()
             metadata_text = f"{title} {category_val} {desc} {tags_val}".lower()
             is_derived_title = title.startswith("Continued:") or title.startswith("Composed:")
 
-            score = 0
+            doc_words = max(1, len(content.split()))
+            k1 = 1.2
+            b = 0.75
+            avgdl = 60.0
+            len_norm = (1.0 - b) + b * (doc_words / avgdl)
+
+            score = 0.0
             for kw in keywords:
                 content_count = content_lower.count(kw)
-                score += content_count
-                # Metadata bonus: +1 max per keyword (suppressed for derived continuation titles to prevent crowding out parent chats)
+                if content_count > 0:
+                    bm25_tf = (content_count * (k1 + 1.0)) / (content_count + k1 * len_norm)
+                    score += bm25_tf
+                # Metadata bonus: +0.5 max per keyword (suppressed for derived continuation titles to prevent crowding out parent chats)
                 if kw in metadata_text and not is_derived_title:
-                    score += 1
+                    score += 0.5
 
             if score > 0:
                 snippet = self._generate_snippet(content, keywords)

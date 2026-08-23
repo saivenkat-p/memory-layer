@@ -39,6 +39,7 @@ class HybridSearchEngine:
         self.semantic_weight = semantic_weight
         self.keyword_weight = keyword_weight
         self.min_relevance_threshold = min_relevance_threshold
+        self.diversity_decay = 0.85
 
     def search(
         self,
@@ -49,6 +50,7 @@ class HybridSearchEngine:
         limit: int = 50,
         expand_context: bool = True,
         expansion_strategy: str = "adaptive",
+        diversity_decay: Optional[float] = None,
     ) -> List[SearchResult]:
         """
         Executes Hybrid Search combining Lexical Matching and Neural Embedding Similarity.
@@ -147,11 +149,43 @@ class HybridSearchEngine:
 
         # Sort by Final Hybrid Score DESC
         hybrid_results.sort(key=lambda r: r.score, reverse=True)
-        top_results = hybrid_results[:limit]
+
+        # V6.4-B Experiment 2: Conversation Diversity & Flooding Control (Post-Fusion)
+        decay_factor = diversity_decay if diversity_decay is not None else self.diversity_decay
+        top_results = self._apply_conversation_diversity(hybrid_results, decay=decay_factor, limit=limit)
 
         # V6.4-C: Contextual Result Expansion (Post-Ranking Stage)
         if expand_context and top_results:
             top_results = self.expander.expand_results(top_results, strategy=expansion_strategy)
 
         return top_results
+
+    def _apply_conversation_diversity(
+        self,
+        results: List[SearchResult],
+        decay: float = 0.85,
+        limit: int = 50,
+    ) -> List[SearchResult]:
+        """
+        Applies marginal relevance decay to prevent single verbose conversations from
+        monopolizing Top-K slots with low-value acknowledgments.
+
+        The k-th message from the same conversation is scaled by decay^(k-1).
+        Results are reranked by adjusted score, but original match scores are preserved.
+        """
+        if not results or decay >= 1.0 or len(results) <= 1:
+            return results[:limit]
+
+        conv_counts: Dict[str, int] = {}
+        adjusted_candidates: List[Tuple[float, SearchResult]] = []
+
+        for r in results:
+            count = conv_counts.get(r.conversation_id, 0)
+            multiplier = decay ** count
+            adj_score = r.score * multiplier
+            conv_counts[r.conversation_id] = count + 1
+            adjusted_candidates.append((adj_score, r))
+
+        adjusted_candidates.sort(key=lambda x: x[0], reverse=True)
+        return [r for _, r in adjusted_candidates[:limit]]
 

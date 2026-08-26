@@ -111,6 +111,25 @@ class Database:
             );
         """)
 
+        # Structured Memories table (Milestone V6.5-E1)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS structured_memories (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                memory_type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                start_msg_index INTEGER NOT NULL,
+                end_msg_index INTEGER NOT NULL,
+                source_message_ids TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 1.0,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
+            );
+        """)
+
         # Create indices for quick lookups
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_messages_conversation_id 
@@ -130,6 +149,16 @@ class Database:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_conv_rel_child 
             ON conversation_relationships(child_conversation_id);
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_structured_memories_conv 
+            ON structured_memories(conversation_id);
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_structured_memories_type 
+            ON structured_memories(memory_type);
         """)
 
         conn.commit()

@@ -201,3 +201,39 @@ class PortableContextPackage:
     def to_json(self, indent: int = 2) -> str:
         import json
         return json.dumps(self.to_dict(), indent=indent)
+
+
+@dataclass
+class StructuredMemory:
+    """
+    V6.5 — Represents a discrete, categorized unit of extracted knowledge
+    with atomic provenance links to raw source messages.
+    """
+    conversation_id: str
+    memory_type: str  # 'decision', 'preference', 'fact', 'project_goal'
+    content: str
+    start_msg_index: int
+    end_msg_index: int
+    source_message_ids: List[str] = field(default_factory=list)
+    provider: str = "Unknown"
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    confidence: float = 1.0  # In E1, represents deterministic extraction output (not probability of factual correctness)
+    status: str = "active"  # 'active', 'superseded', 'archived'
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "conversation_id": self.conversation_id,
+            "memory_type": self.memory_type,
+            "content": self.content,
+            "start_msg_index": self.start_msg_index,
+            "end_msg_index": self.end_msg_index,
+            "source_message_ids": self.source_message_ids,
+            "provider": self.provider,
+            "confidence": self.confidence,
+            "status": self.status,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }

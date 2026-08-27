@@ -154,5 +154,23 @@
   - Created `tests/integration/test_live_chatgpt_api.py` (isolated opt-in live test suite requiring `RUN_LIVE_API_TESTS=1`).
   - Executed full regression test suite: **80 / 80 tests PASSED** (`Ran 80 tests in 91.602s — OK`).
 
-  - Created `tests/test_version5a_export.py` (10 tests covering package creation, schema version 1.0, provenance preservation, ordering, deterministic text generation, no unselected data leakage, JSON serialization, and local export execution).
-  - Executed full regression test suite: **66 / 66 tests PASSED** (`Ran 66 tests in 107.965s — OK`).
+---
+
+## Log Entry 10: Milestone V6.5-E4 — Structured Memory Retrieval & REST API Layer
+- **Problem Solved**:
+  - Exposes discrete `StructuredMemory` records (decisions, preferences, facts, project goals) to the search engine, browser extension, and external interfaces with complete atomic provenance hydration without requiring live LLM calls during search.
+- **Structured Memory Search Engine (`app/search/structured_memory_search.py`)**:
+  - Created `StructuredMemorySearchEngine` and `StructuredMemorySearchResult` dataclass.
+  - Multi-attribute filtering: filter by `memory_type` (`decision`, `preference`, `fact`, `project_goal`), `conversation_id`, and `status` (`active`, `superseded`, `all`).
+  - Hybrid scoring formula ($S_{\text{final}} = 0.6 \cdot S_{\text{semantic}} + 0.4 \cdot S_{\text{keyword\_norm}}$) with exact phrase boosting and relevance thresholding (default $\ge 0.35$).
+  - Complete atomic provenance hydration resolving underlying raw `Message` records across declared `[start_msg_index, end_msg_index]` spans.
+- **REST API Endpoints (`app/api/server.py`)**:
+  - `GET /api/v1/memories`: Lists memories with pagination (`limit`, `offset`), structural filtering (`type`, `conversation_id`, `status`), and optional provenance hydration (`hydrate=true`).
+  - `GET /api/v1/memories/{id}`: Retrieves single structured memory with hydrated source messages (or returns 404).
+  - `POST /api/v1/memories/search`: Hybrid search over memory content with score ranking and thresholding.
+  - `DELETE /api/v1/memories/{id}`: Deletes a memory record with 404 handling.
+  - CORS methods updated to include `DELETE`.
+- **Automated Unit & Integration Tests**:
+  - Created `tests/test_structured_memory_api.py` (19 comprehensive tests covering listing, pagination, type filtering, status filtering, conversation filtering, provenance hydration, hybrid search, 400/404 error handling, deletion, and CORS headers).
+  - Executed complete project regression suite: **173 / 173 runnable tests PASSED** (1 skipped live API test).
+

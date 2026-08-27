@@ -20,12 +20,14 @@ from urllib.parse import urlparse, parse_qs
 from typing import Dict, Any, Optional, List
 
 from app.repositories.conversation_repository import ConversationRepository
+from app.repositories.structured_memory_repository import StructuredMemoryRepository
 from app.search.hybrid_search import HybridSearchEngine
 from app.search.find_here import FindHereEngine
+from app.search.structured_memory_search import StructuredMemorySearchEngine
 from app.services.context_composer import ContextComposer
 from app.services.export_engine import LocalExportDestination
 from app.services.destination_adapters.registry import DestinationRegistry
-from app.models.schemas import PortableContextPackage, Conversation, Message
+from app.models.schemas import PortableContextPackage, Conversation, Message, StructuredMemory
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +42,10 @@ class MemoryLayerHTTPRequestHandler(BaseHTTPRequestHandler):
 
     # Thread-safe shared service singletons
     repo = ConversationRepository()
+    memory_repo = StructuredMemoryRepository(db=repo.db)
     hybrid_engine = HybridSearchEngine(repo=repo)
     find_here_engine = FindHereEngine(repo=repo)
+    memory_search_engine = StructuredMemorySearchEngine(memory_repo=memory_repo, conv_repo=repo, db=repo.db)
     composer = ContextComposer(repo=repo, search_engine=hybrid_engine)
     dest_registry = DestinationRegistry()
     local_exporter = LocalExportDestination()
@@ -58,7 +62,7 @@ class MemoryLayerHTTPRequestHandler(BaseHTTPRequestHandler):
             # For extension requests without specific match, allow extension scheme pattern
             self.send_header("Access-Control-Allow-Origin", origin)
 
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Memory-Layer-Key")
 
     def _send_json_response(self, status_code: int, data: Dict[str, Any]):
@@ -119,6 +123,50 @@ class MemoryLayerHTTPRequestHandler(BaseHTTPRequestHandler):
                     self._send_error_response(404, f"Conversation '{conv_id}' not found.", "NOT_FOUND")
                 else:
                     self._send_json_response(200, conv.to_dict())
+            elif path == "/api/v1/memories":
+                qs = parse_qs(parsed.query)
+                memory_type = qs.get("type", [None])[0] or qs.get("memory_type", [None])[0]
+                conv_id = qs.get("conversation_id", [None])[0]
+                status = qs.get("status", ["active"])[0]
+                try:
+                    limit = int(qs.get("limit", [50])[0])
+                except ValueError:
+                    limit = 50
+                try:
+                    offset = int(qs.get("offset", [0])[0])
+                except ValueError:
+                    offset = 0
+                hydrate_param = qs.get("hydrate", ["false"])[0].lower() in ["true", "1"]
+
+                valid_types = ["decision", "preference", "fact", "project_goal"]
+                if memory_type and memory_type not in valid_types:
+                    self._send_error_response(400, f"Invalid memory_type '{memory_type}'. Must be one of {valid_types}.", "INVALID_MEMORY_TYPE")
+                    return
+
+                memories, total = self.memory_search_engine.list_memories(
+                    memory_type=memory_type,
+                    conversation_id=conv_id,
+                    status=status,
+                    limit=limit,
+                    offset=offset,
+                    hydrate_provenance=hydrate_param
+                )
+                self._send_json_response(200, {
+                    "memories": memories,
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset
+                })
+            elif path.startswith("/api/v1/memories/"):
+                memory_id = path.replace("/api/v1/memories/", "").strip()
+                qs = parse_qs(parsed.query)
+                hydrate_param = qs.get("hydrate", ["true"])[0].lower() in ["true", "1"]
+
+                memory_data = self.memory_search_engine.get_memory_with_provenance(memory_id, hydrate_provenance=hydrate_param)
+                if not memory_data:
+                    self._send_error_response(404, f"Structured memory '{memory_id}' not found.", "NOT_FOUND")
+                else:
+                    self._send_json_response(200, memory_data)
             else:
                 self._send_error_response(404, f"Endpoint '{self.path}' not found.", "ENDPOINT_NOT_FOUND")
         except Exception as e:
@@ -284,11 +332,80 @@ class MemoryLayerHTTPRequestHandler(BaseHTTPRequestHandler):
                     "messages_synced": len(messages)
                 })
 
+            elif path == "/api/v1/memories/search":
+                query = body.get("query", "").strip()
+                memory_type = body.get("type") or body.get("memory_type")
+                conv_id = body.get("conversation_id")
+                status = body.get("status", "active")
+                try:
+                    limit = int(body.get("limit", 20))
+                except ValueError:
+                    limit = 20
+                try:
+                    threshold = float(body.get("threshold", 0.35))
+                except ValueError:
+                    threshold = 0.35
+                hydrate = bool(body.get("hydrate", True))
+
+                valid_types = ["decision", "preference", "fact", "project_goal"]
+                if memory_type and memory_type not in valid_types:
+                    self._send_error_response(400, f"Invalid memory_type '{memory_type}'. Must be one of {valid_types}.", "INVALID_MEMORY_TYPE")
+                    return
+
+                if not query:
+                    self._send_json_response(200, {
+                        "query": "",
+                        "results": [],
+                        "total": 0
+                    })
+                    return
+
+                results = self.memory_search_engine.search_memories(
+                    query=query,
+                    memory_type=memory_type,
+                    conversation_id=conv_id,
+                    status=status,
+                    limit=limit,
+                    threshold=threshold,
+                    hydrate_provenance=hydrate
+                )
+                self._send_json_response(200, {
+                    "query": query,
+                    "total": len(results),
+                    "results": [r.to_dict() for r in results]
+                })
+
             else:
                 self._send_error_response(404, f"Endpoint '{self.path}' not found.", "ENDPOINT_NOT_FOUND")
 
         except Exception as e:
             logger.error(f"API POST error: {e}", exc_info=True)
+            self._send_error_response(500, str(e), "SERVER_ERROR")
+
+    def do_DELETE(self):
+        """Handle DELETE endpoints."""
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/")
+
+        try:
+            if path.startswith("/api/v1/memories/"):
+                memory_id = path.replace("/api/v1/memories/", "").strip()
+                if not memory_id:
+                    self._send_error_response(400, "Memory ID must be provided in URL path.", "INVALID_INPUT")
+                    return
+
+                deleted = self.memory_repo.delete_memory(memory_id)
+                if not deleted:
+                    self._send_error_response(404, f"Structured memory '{memory_id}' not found.", "NOT_FOUND")
+                else:
+                    self._send_json_response(200, {
+                        "success": True,
+                        "deleted_id": memory_id
+                    })
+            else:
+                self._send_error_response(404, f"Endpoint '{self.path}' not found.", "ENDPOINT_NOT_FOUND")
+        except Exception as e:
+            logger.error(f"API DELETE error: {e}", exc_info=True)
             self._send_error_response(500, str(e), "SERVER_ERROR")
 
     def log_message(self, format, *args):

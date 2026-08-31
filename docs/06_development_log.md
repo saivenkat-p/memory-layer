@@ -212,5 +212,28 @@
   - Created `tests/test_cross_ai_context_bridge.py` (7 tests covering multi-source grouping, turn ordering, packaging contract, minimum context isolation, 2D navigation mathematics, and XSS protection).
   - Executed complete project regression suite: **187 / 187 runnable tests PASSED** (1 skipped live API test).
 
+---
+
+## Log Entry 13: Milestone V6.7 — Security & Reliability Hardening
+- **Problem Solved**:
+  - Eliminated critical attack vectors and dangerous failure modes to prepare the Personal AI Memory Layer for safe real-user operation and funding-stage prototype evaluations.
+- **REST API Boundary Hardening (`app/api/server.py`)**:
+  - *CORS Whitelist*: Replaced open origin reflection with strict allowlist (`chrome-extension://*`, `http://localhost:*`, `http://127.0.0.1:*`, `https://chatgpt.com`, `https://chat.openai.com`, `https://gemini.google.com`, `https://claude.ai`). Unauthorized origins receive `403 Forbidden` and no CORS allow headers.
+  - *Payload Size Limits*: Added 10MB maximum request size check before reading streams, returning `413 Payload Too Large`.
+  - *JSON Safety*: Protected against malformed bodies with standard `400 INVALID_JSON`.
+- **Composer Injection Hardening (`extension/core/injection.js`)**:
+  - Replaced deprecated `execCommand()` with modern `InputEvent('insertText')` dispatching, Range/Selection insertion APIs, and React/ProseMirror property descriptor bindings.
+  - Preserves strict INSERT-ONLY guarantee (never auto-submits or clicks Send).
+- **Client & Bridge Resilience (`extension/core/`)**:
+  - *Fetch Timeout*: Added `AbortController` 5000ms timeout protection on all `MemoryLayerClient` requests.
+  - *Pending Context Consumer*: Upgraded from rigid 1s timeout to resilient polling (up to 10s, 33 attempts @ 300ms) with immediate storage cleanup preventing duplicate injection.
+  - *Prompt Injection Framing*: Context packages framed with explicit historical reference disclaimer headers preventing adversarial model hijacking.
+- **DOM Attribute Sanitization (`extension/content/content.js`)**:
+  - Eliminated storage of large raw text strings in DOM attributes (`data-text`). All search items resolved via in-memory JavaScript maps using ID references.
+- **Automated Unit & Contract Tests**:
+  - Created `tests/test_security_and_reliability.py` (13 comprehensive tests covering CORS rejection/acceptance, oversized payloads, malformed JSON, 404/405 safety, XSS sanitization, prompt injection framing, isolation, INSERT-ONLY, duplicate prevention, and provenance preservation).
+  - Executed complete project regression suite: **200 / 200 runnable tests PASSED** (1 skipped live API test).
+
+
 
 

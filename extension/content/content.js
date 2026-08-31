@@ -1,5 +1,5 @@
 /**
- * Content Script for Personal AI Memory Layer Extension (Cross-AI Context Bridge).
+ * Content Script for Personal AI Memory Layer Extension (Cross-AI Context Bridge & Security Hardened V6.7).
  *
  * Implements the complete Cross-AI Context Bridge & Navigation UX:
  * 1. 🧠 Structured Memories tab (Decisions, Preferences, Facts, Project Goals).
@@ -11,8 +11,8 @@
  *    - [← / →]: Cycle between distinct matching conversations
  *    - [↑ / ↓]: Navigate cards/occurrences within active list
  *    - [Esc]: Close overlay modal
- * 7. Pending Context Consumer on New Chat initiation.
- * 8. Strict safety: INSERT ONLY (never auto-sends), local-only API (127.0.0.1:8000), XSS-safe.
+ * 7. Pending Context Consumer on New Chat initiation (up to 10s resilient polling).
+ * 8. Strict safety: INSERT ONLY (never auto-sends), local-only API (127.0.0.1:8000), XSS-safe, ID-only DOM references (no large data-text attributes).
  */
 
 (async function () {
@@ -534,6 +534,9 @@
         return;
       }
 
+      // Maintain in-memory item lookup map (V6.7 hardening: no large strings in DOM attributes)
+      const rawItemsMap = new Map();
+
       // Collect distinct conversation IDs
       const convSet = new Set();
       backendResults.forEach(r => { if (r.conversation_id) convSet.add(r.conversation_id); });
@@ -547,6 +550,16 @@
         html += `<div class="results-section-header">📄 Visible Webpage DOM Messages (${domMatches.length})</div>`;
         domMatches.forEach((m, idx) => {
           const domId = `dom-msg-${m.index !== undefined ? m.index : idx}`;
+          rawItemsMap.set(domId, {
+            id: domId,
+            conversationId: "current-webpage",
+            conversationTitle: currentAdapter.getCurrentConversationTitle(),
+            provider: currentAdapter.getProviderName(),
+            role: m.role || "user",
+            turnIndex: m.index !== undefined ? m.index : idx,
+            content: m.content || ""
+          });
+
           const isChecked = bridge.hasItem(domId);
           html += `
             <div class="memory-card dom-card" data-conv-id="current-page">
@@ -557,10 +570,10 @@
               <div class="card-content">${escapeHtml(m.content.slice(0, 300))}${m.content.length > 300 ? "..." : ""}</div>
               <div class="card-actions">
                 <label class="select-label">
-                  <input type="checkbox" class="raw-select-checkbox" data-id="${escapeAttr(domId)}" data-text="${escapeAttr(m.content)}" data-role="${escapeAttr(m.role)}" data-idx="${m.index || 0}" ${isChecked ? "checked" : ""}>
+                  <input type="checkbox" class="raw-select-checkbox" data-id="${escapeAttr(domId)}" ${isChecked ? "checked" : ""}>
                   <span>Select</span>
                 </label>
-                <button type="button" class="insert-btn raw-insert-btn" data-text="${escapeAttr(m.content)}">📥 Insert into Prompt</button>
+                <button type="button" class="insert-btn raw-insert-btn" data-id="${escapeAttr(domId)}">📥 Insert into Prompt</button>
               </div>
             </div>
           `;
@@ -574,6 +587,16 @@
           const scoreStr = r.score ? `${Math.round(r.score * 100)}%` : "";
           const snippet = r.snippet || r.matched_content || "";
           const rawId = r.matched_message_id || `raw-msg-${r.conversation_id}-${idx}`;
+          rawItemsMap.set(rawId, {
+            id: rawId,
+            conversationId: r.conversation_id || "conv",
+            conversationTitle: r.conversation_title || "Conversation",
+            provider: r.source || "AI",
+            role: r.matched_role || "assistant",
+            turnIndex: r.matched_message_index !== undefined ? r.matched_message_index : idx,
+            content: r.context_text || r.matched_content || snippet
+          });
+
           const isChecked = bridge.hasItem(rawId);
           html += `
             <div class="memory-card" data-conv-id="${escapeAttr(r.conversation_id || "conv")}">
@@ -586,10 +609,10 @@
               <div class="card-content">${escapeHtml(snippet)}</div>
               <div class="card-actions">
                 <label class="select-label">
-                  <input type="checkbox" class="raw-select-checkbox" data-id="${escapeAttr(rawId)}" data-conv-id="${escapeAttr(r.conversation_id || "")}" data-conv-title="${escapeAttr(r.conversation_title || "")}" data-provider="${escapeAttr(r.source || "")}" data-text="${escapeAttr(snippet)}" data-role="${escapeAttr(r.matched_role || "assistant")}" data-idx="${r.matched_message_index || 0}" ${isChecked ? "checked" : ""}>
+                  <input type="checkbox" class="raw-select-checkbox" data-id="${escapeAttr(rawId)}" ${isChecked ? "checked" : ""}>
                   <span>Select</span>
                 </label>
-                <button type="button" class="insert-btn raw-insert-btn" data-text="${escapeAttr(r.context_text || r.matched_content || snippet)}">📥 Insert into Prompt</button>
+                <button type="button" class="insert-btn raw-insert-btn" data-id="${escapeAttr(rawId)}">📥 Insert into Prompt</button>
               </div>
             </div>
           `;
@@ -598,20 +621,13 @@
 
       resultsContainer.innerHTML = html;
 
-      // Bind Raw Checkbox Selections (Bridge Integration)
+      // Bind Raw Checkbox Selections (Bridge Integration with In-Memory Lookup)
       resultsContainer.querySelectorAll(".raw-select-checkbox").forEach(cb => {
         cb.addEventListener("change", (e) => {
           const itemId = cb.getAttribute("data-id");
-          if (cb.checked) {
-            bridge.addItem({
-              id: itemId,
-              conversationId: cb.getAttribute("data-conv-id") || "current-webpage",
-              conversationTitle: cb.getAttribute("data-conv-title") || currentAdapter.getCurrentConversationTitle(),
-              provider: cb.getAttribute("data-provider") || currentAdapter.getProviderName(),
-              role: cb.getAttribute("data-role") || "user",
-              turnIndex: parseInt(cb.getAttribute("data-idx") || "0", 10),
-              content: cb.getAttribute("data-text") || ""
-            });
+          const item = rawItemsMap.get(itemId);
+          if (cb.checked && item) {
+            bridge.addItem(item);
           } else {
             bridge.removeItem(itemId);
           }
@@ -622,9 +638,12 @@
       // Bind Raw Insert Buttons (INSERT ONLY, NEVER AUTO-SEND)
       resultsContainer.querySelectorAll(".raw-insert-btn").forEach(btn => {
         btn.addEventListener("click", (e) => {
-          const textToInsert = btn.getAttribute("data-text");
-          const inserted = currentAdapter.insertText(`[Memory Layer Reference Context]:\n${textToInsert}\n\n`);
-          handleInsertFeedback(btn, inserted);
+          const itemId = btn.getAttribute("data-id");
+          const item = rawItemsMap.get(itemId);
+          if (item && item.content) {
+            const inserted = currentAdapter.insertText(`[Memory Layer Reference Context]:\n${item.content}\n\n`);
+            handleInsertFeedback(btn, inserted);
+          }
         });
       });
     }

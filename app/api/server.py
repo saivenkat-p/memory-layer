@@ -50,17 +50,33 @@ class MemoryLayerHTTPRequestHandler(BaseHTTPRequestHandler):
     dest_registry = DestinationRegistry()
     local_exporter = LocalExportDestination()
 
+    ALLOWED_HOST_ORIGINS = {
+        "https://chatgpt.com",
+        "https://chat.openai.com",
+        "https://gemini.google.com",
+        "https://claude.ai",
+    }
+    MAX_PAYLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
+
+    def _is_origin_allowed(self, origin: str) -> bool:
+        if not origin:
+            return True
+        if origin.startswith("chrome-extension://"):
+            return True
+        if origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1"):
+            return True
+        if origin.rstrip("/") in self.ALLOWED_HOST_ORIGINS:
+            return True
+        return False
+
     def _send_cors_headers(self):
         origin = self.headers.get("Origin", "")
-        # Security decision: restrict to extension origins or local dev origins
-        if origin and (origin.startswith("chrome-extension://") or origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1")):
+        if origin and self._is_origin_allowed(origin):
             self.send_header("Access-Control-Allow-Origin", origin)
         elif not origin:
             # Fallback for non-browser direct clients
             self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1:8000")
-        else:
-            # For extension requests without specific match, allow extension scheme pattern
-            self.send_header("Access-Control-Allow-Origin", origin)
+        # Note: Unauthorized origins receive NO Access-Control-Allow-Origin header
 
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Memory-Layer-Key")
@@ -84,12 +100,21 @@ class MemoryLayerHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         """Handle CORS pre-flight requests."""
+        origin = self.headers.get("Origin", "")
+        if origin and not self._is_origin_allowed(origin):
+            self._send_error_response(403, f"Origin '{origin}' is not authorized by CORS policy.", "FORBIDDEN_ORIGIN")
+            return
         self.send_response(200)
         self._send_cors_headers()
         self.end_headers()
 
     def do_GET(self):
         """Handle GET endpoints."""
+        origin = self.headers.get("Origin", "")
+        if origin and not self._is_origin_allowed(origin):
+            self._send_error_response(403, f"Origin '{origin}' is not authorized by CORS policy.", "FORBIDDEN_ORIGIN")
+            return
+
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
 
@@ -175,10 +200,28 @@ class MemoryLayerHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """Handle POST endpoints."""
+        origin = self.headers.get("Origin", "")
+        if origin and not self._is_origin_allowed(origin):
+            self._send_error_response(403, f"Origin '{origin}' is not authorized by CORS policy.", "FORBIDDEN_ORIGIN")
+            return
+
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
 
-        content_length = int(self.headers.get("Content-Length", 0))
+        content_length_header = self.headers.get("Content-Length")
+        if content_length_header:
+            try:
+                content_length = int(content_length_header)
+            except ValueError:
+                self._send_error_response(400, "Invalid Content-Length header.", "INVALID_HEADER")
+                return
+
+            if content_length > self.MAX_PAYLOAD_SIZE:
+                self._send_error_response(413, f"Payload exceeds maximum allowed size of {self.MAX_PAYLOAD_SIZE} bytes (10 MB).", "PAYLOAD_TOO_LARGE")
+                return
+        else:
+            content_length = 0
+
         body_bytes = self.rfile.read(content_length) if content_length > 0 else b"{}"
 
         try:
@@ -384,6 +427,11 @@ class MemoryLayerHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         """Handle DELETE endpoints."""
+        origin = self.headers.get("Origin", "")
+        if origin and not self._is_origin_allowed(origin):
+            self._send_error_response(403, f"Origin '{origin}' is not authorized by CORS policy.", "FORBIDDEN_ORIGIN")
+            return
+
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
 

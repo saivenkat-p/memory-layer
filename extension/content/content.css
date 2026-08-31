@@ -743,3 +743,56 @@
 .btn-apply-dest:hover {
   opacity: 0.9;
 }
+
+.btn-focus-topic {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.btn-focus-topic:hover {
+  opacity: 0.9;
+}
+
+.dest-preview-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  background-color: #1e293b;
+  border: 1px dashed #475569;
+  border-radius: 6px;
+  margin: 0 18px 10px 18px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.dest-preview-toggle:hover {
+  border-color: #38bdf8;
+  color: #f8fafc;
+}
+
+.dest-preview-box {
+  max-height: 140px;
+  overflow-y: auto;
+  margin: 0 18px 12px 18px;
+  padding: 10px 12px;
+  background-color: #020617;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+

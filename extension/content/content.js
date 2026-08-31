@@ -719,6 +719,29 @@
       const count = bridge.getCount();
       const currentProvider = currentAdapter.getProviderName();
       const currentTitle = currentAdapter.getCurrentConversationTitle();
+      const formatted = bridge.formatContextPackage();
+
+      // Determine alternate supported AI providers
+      const alternateProviders = [];
+      if (currentProvider !== "ChatGPT") {
+        alternateProviders.push({ key: "chatgpt", name: "ChatGPT", host: "chatgpt.com" });
+      }
+      if (currentProvider !== "Claude") {
+        alternateProviders.push({ key: "claude", name: "Claude", host: "claude.ai" });
+      }
+      if (currentProvider !== "Gemini") {
+        alternateProviders.push({ key: "gemini", name: "Gemini", host: "gemini.google.com" });
+      }
+
+      const altOptionsHtml = alternateProviders.map(p => `
+        <label class="dest-option-card">
+          <input type="radio" name="ml_dest_choice" value="alt_${p.key}">
+          <div class="dest-option-info">
+            <div class="dest-option-title">✨ Open in ${p.name} (${p.host})</div>
+            <div class="dest-option-desc">Opens ${p.name} in a new tab with staged context ready for insertion.</div>
+          </div>
+        </label>
+      `).join("");
 
       destModal.innerHTML = `
         <div class="dest-chooser-container">
@@ -731,12 +754,19 @@
             📦 <strong>Selected Context:</strong> ${count} item${count === 1 ? "" : "s"} ready to transfer.
           </div>
 
+          <!-- Exact Context Preview Accordion (Single Authoritative Formatter) -->
+          <div class="dest-preview-toggle" id="ml-toggle-preview">
+            <span>👁️ Preview Formatted Context (${count} items)</span>
+            <span id="ml-preview-arrow">▾</span>
+          </div>
+          <pre class="dest-preview-box hidden" id="ml-preview-box">${escapeHtml(formatted)}</pre>
+
           <div class="dest-options-list">
             <label class="dest-option-card active">
               <input type="radio" name="ml_dest_choice" value="current" checked>
               <div class="dest-option-info">
-                <div class="dest-option-title">💬 Apply to Active Chat</div>
-                <div class="dest-option-desc">Inserts context directly into current composer: <em>"${escapeHtml(currentTitle)}"</em> on ${currentProvider}.</div>
+                <div class="dest-option-title">💬 Apply to Active Chat (${currentProvider})</div>
+                <div class="dest-option-desc">Inserts context directly into current composer: <em>"${escapeHtml(currentTitle)}"</em>.</div>
               </div>
             </label>
 
@@ -744,15 +774,17 @@
               <input type="radio" name="ml_dest_choice" value="new">
               <div class="dest-option-info">
                 <div class="dest-option-title">✨ Start New Chat on ${currentProvider}</div>
-                <div class="dest-option-desc">Opens a fresh conversation session and auto-injects the selected context package.</div>
+                <div class="dest-option-desc">Opens a fresh conversation session on ${currentProvider} and auto-injects context.</div>
               </div>
             </label>
+
+            ${altOptionsHtml}
 
             <label class="dest-option-card">
               <input type="radio" name="ml_dest_choice" value="copy">
               <div class="dest-option-info">
                 <div class="dest-option-title">📋 Copy Context Package to Clipboard</div>
-                <div class="dest-option-desc">Copies clean, formatted Markdown with provenance citations to paste across Claude, Gemini, or ChatGPT.</div>
+                <div class="dest-option-desc">Copies clean, formatted Markdown with provenance citations to paste across any AI tool.</div>
               </div>
             </label>
           </div>
@@ -766,6 +798,24 @@
 
       destModal.classList.remove("hidden");
 
+      // Bind Preview Toggle
+      const previewToggle = document.getElementById("ml-toggle-preview");
+      const previewBox = document.getElementById("ml-preview-box");
+      const previewArrow = document.getElementById("ml-preview-arrow");
+
+      if (previewToggle && previewBox && previewArrow) {
+        previewToggle.addEventListener("click", () => {
+          const isHidden = previewBox.classList.contains("hidden");
+          if (isHidden) {
+            previewBox.classList.remove("hidden");
+            previewArrow.textContent = "▴";
+          } else {
+            previewBox.classList.add("hidden");
+            previewArrow.textContent = "▾";
+          }
+        });
+      }
+
       // Bind Dest Modal Events
       document.getElementById("ml-close-dest-modal").addEventListener("click", () => {
         destModal.classList.add("hidden");
@@ -778,13 +828,14 @@
         card.addEventListener("click", () => {
           destModal.querySelectorAll(".dest-option-card").forEach(c => c.classList.remove("active"));
           card.classList.add("active");
+          const radio = card.querySelector('input[type="radio"]');
+          if (radio) radio.checked = true;
         });
       });
 
       document.getElementById("ml-execute-dest-btn").addEventListener("click", async () => {
         const selectedRadio = destModal.querySelector('input[name="ml_dest_choice"]:checked');
         const choice = selectedRadio ? selectedRadio.value : "current";
-        const formatted = bridge.formatContextPackage();
         const executeBtn = document.getElementById("ml-execute-dest-btn");
 
         if (choice === "current") {
@@ -798,6 +849,11 @@
           destModal.classList.add("hidden");
           overlay.classList.add("hidden");
           bridge.applyToNewChat(currentAdapter, formatted);
+        } else if (choice.startsWith("alt_")) {
+          const targetKey = choice.replace("alt_", "");
+          destModal.classList.add("hidden");
+          overlay.classList.add("hidden");
+          await bridge.applyToAlternateProvider(targetKey, formatted);
         } else if (choice === "copy") {
           const copied = await bridge.copyToClipboard(formatted);
           if (copied) {

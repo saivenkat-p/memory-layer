@@ -174,3 +174,43 @@
   - Created `tests/test_structured_memory_api.py` (19 comprehensive tests covering listing, pagination, type filtering, status filtering, conversation filtering, provenance hydration, hybrid search, 400/404 error handling, deletion, and CORS headers).
   - Executed complete project regression suite: **173 / 173 runnable tests PASSED** (1 skipped live API test).
 
+---
+
+## Log Entry 11: Milestone V6.5-UX — In-Browser Structured Memory User Experience
+- **Problem Solved**:
+  - Bridges the backend Structured Memory retrieval engine with a user-facing in-browser interface across ChatGPT, Gemini, and Claude, allowing users to discover, filter, inspect provenance, and insert structured memories directly into their AI workflows.
+- **API Client Upgrades (`extension/core/memory_client.js`)**:
+  - Implemented `listMemories()`, `searchMemories()`, `getMemory()`, and `deleteMemory()` communicating with local API (`127.0.0.1:8000/api/v1`).
+- **Interactive In-Page Overlay (`extension/content/content.js` & `extension/content/content.css`)**:
+  - **3-Tab Navigation**: Added `🧠 Structured Memories` as default high-value mode alongside `💬 Raw Message Search` and `🔍 This Conversation`.
+  - **Category Filtering**: Added quick-filter chips for `🏷️ All`, `⚡ Decisions`, `⭐ Preferences`, `📌 Facts`, `🎯 Goals`.
+  - **Expandable Provenance Drawers**: Toggles exact multi-turn dialogue spans (`[Turns start..end]`) with role badges (`👤 User` / `🤖 Assistant`) and turn indices.
+  - **Multi-Memory Selection & Prompt Packaging**: Enables selecting multiple memories with sticky footer action formatting unified Markdown context blocks.
+  - **V6.4 Keyboard Navigation**: Preserves `← / →` for cross-conversation navigation, `↑ / ↓` for intra-list card navigation, and `Esc` for closing overlay.
+  - **Safety Guarantees**: INSERT ONLY (never auto-sends), local-only API, and XSS sanitization.
+- **Automated Unit & Contract Tests**:
+  - Created `tests/test_memory_ux_extension.py` (7 tests covering client API contracts, category filtering, search payloads, provenance resolution fidelity, single/batch prompt packaging, and XSS sanitization).
+  - Executed full project regression suite: **180 / 180 runnable tests PASSED** (1 skipped live API test).
+
+---
+
+## Log Entry 12: Milestone V6.6 — Cross-AI Context Bridge & Destination Chooser
+- **Problem Solved**:
+  - Enables users to discover context across multiple conversations and AI providers (ChatGPT, Gemini, Claude), select the minimum useful turns, and transfer that structured knowledge into any destination conversation (Active Chat, New Chat, or Clipboard).
+- **Core Engine (`extension/core/context_bridge.js`)**:
+  - Created `ContextBridge` class managing multi-source context tracking, chronological turn ordering, and deterministic Markdown packaging with full provenance headers.
+  - Implemented `applyToCurrentChat()` (INSERT ONLY), `applyToNewChat()` (stores pending context in session storage and triggers adapter navigation), and `copyToClipboard()` (safe fallback).
+- **In-Page Destination Chooser Modal (`extension/content/content.js` & `extension/content/content.css`)**:
+  - Added `[ 🎯 Apply to Destination... ]` action in the multi-select footer.
+  - Interactive radio-card destination picker:
+    - *Apply to Active Chat*: Inserts formatted context directly into composer.
+    - *Start New Chat*: Opens a fresh chat session and automatically injects the context package on load.
+    - *Copy to Clipboard*: Clean Markdown copy for external pasting.
+- **Provider Adapters (`extension/providers/`)**:
+  - Implemented `startNewChat()` on `BaseProviderAdapter`, `ChatGPTAdapter`, `GeminiAdapter`, and `ClaudeAdapter`.
+- **Automated Unit & Contract Tests**:
+  - Created `tests/test_cross_ai_context_bridge.py` (7 tests covering multi-source grouping, turn ordering, packaging contract, minimum context isolation, 2D navigation mathematics, and XSS protection).
+  - Executed complete project regression suite: **187 / 187 runnable tests PASSED** (1 skipped live API test).
+
+
+

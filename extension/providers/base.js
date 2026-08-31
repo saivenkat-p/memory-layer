@@ -37,6 +37,10 @@ class BaseProviderAdapter {
     if (!composer) return false;
     return window.PromptInjector.insertTextIntoComposer(composer, text);
   }
+
+  startNewChat() {
+    return false;
+  }
 }
 
 window.BaseProviderAdapter = BaseProviderAdapter;

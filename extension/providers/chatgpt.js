@@ -97,6 +97,24 @@ class ChatGPTAdapter extends BaseProviderAdapter {
   _isElementVisible(el) {
     return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   }
+
+  startNewChat() {
+    const selectors = [
+      'a[data-testid*="create-chat"]',
+      'a[href="/"]',
+      'button[aria-label*="New chat"]',
+      'nav a[href="/"]'
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el && this._isElementVisible(el)) {
+        el.click();
+        return true;
+      }
+    }
+    window.location.href = "https://chatgpt.com/";
+    return true;
+  }
 }
 
 window.ChatGPTAdapter = ChatGPTAdapter;

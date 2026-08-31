@@ -123,6 +123,24 @@ class GeminiAdapter extends BaseProviderAdapter {
   _isElementVisible(el) {
     return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   }
+
+  startNewChat() {
+    const selectors = [
+      'button[data-test-id*="new-chat"]',
+      'button[aria-label*="New chat"]',
+      '.new-chat-button',
+      'a[href="/app"]'
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el && this._isElementVisible(el)) {
+        el.click();
+        return true;
+      }
+    }
+    window.location.href = "https://gemini.google.com/app";
+    return true;
+  }
 }
 
 window.GeminiAdapter = GeminiAdapter;

@@ -39,6 +39,7 @@
         "providers/gemini.js",
         "providers/claude.js",
         "core/sync_engine.js",
+        "core/context_bridge.js",
         "content/content.js"
       ],
       "css": [

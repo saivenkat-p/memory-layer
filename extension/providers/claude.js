@@ -26,6 +26,22 @@ class ClaudeAdapter extends BaseProviderAdapter {
     // Basic selector candidate for claude.ai
     return document.querySelector('div[contenteditable="true"], textarea');
   }
+
+  startNewChat() {
+    const selectors = [
+      'a[href="/new"]',
+      'button[aria-label*="New chat"]'
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el) {
+        el.click();
+        return true;
+      }
+    }
+    window.location.href = "https://claude.ai/new";
+    return true;
+  }
 }
 
 window.ClaudeAdapter = ClaudeAdapter;

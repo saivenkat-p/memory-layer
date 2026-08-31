@@ -205,11 +205,12 @@
           </div>
         </div>
 
-        <!-- Multi-Selection Action Footer (Cross-AI Context Bridge) -->
+        <!-- Multi-Selection Action Footer (Cross-AI Context Bridge & Topic Organization) -->
         <div class="memory-selection-footer hidden" id="ml-selection-footer">
           <div class="selection-count-label" id="ml-selection-label">0 Items Selected</div>
           <div class="selection-actions">
             <button type="button" class="btn-clear-selection" id="ml-clear-selection-btn">Clear</button>
+            <button type="button" class="btn-focus-topic hidden" id="ml-topic-branch-btn">🎯 Focus Topic / Create Branch</button>
             <button type="button" class="btn-choose-dest" id="ml-choose-dest-btn">🎯 Apply to Destination...</button>
             <button type="button" class="btn-insert-selected" id="ml-insert-selected-btn">📥 Insert into Active Chat (0)</button>
           </div>
@@ -237,6 +238,7 @@
     const resultsContainer = document.getElementById("ml-results-list");
     const selectionFooter = document.getElementById("ml-selection-footer");
     const selectionLabel = document.getElementById("ml-selection-label");
+    const topicBranchBtn = document.getElementById("ml-topic-branch-btn");
     const insertSelectedBtn = document.getElementById("ml-insert-selected-btn");
     const chooseDestBtn = document.getElementById("ml-choose-dest-btn");
     const clearSelectionBtn = document.getElementById("ml-clear-selection-btn");
@@ -680,6 +682,11 @@
         selectionFooter.classList.remove("hidden");
         selectionLabel.textContent = `${count} Item${count === 1 ? "" : "s"} Selected`;
         insertSelectedBtn.textContent = `📥 Insert into Active Chat (${count})`;
+        if (activeMode === "current") {
+          topicBranchBtn.classList.remove("hidden");
+        } else {
+          topicBranchBtn.classList.add("hidden");
+        }
       } else {
         selectionFooter.classList.add("hidden");
       }
@@ -691,6 +698,15 @@
       updateSelectionFooter();
     });
 
+    topicBranchBtn.addEventListener("click", () => {
+      if (!bridge.getCount()) return;
+      const currentTitle = currentAdapter.getCurrentConversationTitle();
+      const currentConvId = window.location.pathname.split("/").filter(Boolean).pop() || "current-chat";
+      const topicQuery = searchInput.value.trim() || "Focused Topic";
+      const topicFormatted = bridge.formatTopicBranchPackage(currentTitle, currentConvId, topicQuery);
+      openDestinationChooserModal(topicFormatted, `🎯 Topic Branch: "${escapeHtml(topicQuery)}"`);
+    });
+
     insertSelectedBtn.addEventListener("click", () => {
       if (!bridge.getCount()) return;
       const formatted = bridge.formatContextPackage();
@@ -699,7 +715,7 @@
     });
 
     // =========================================================================
-    // DESTINATION CHOOSER MODAL (CROSS-AI CONTEXT BRIDGE)
+    // DESTINATION CHOOSER MODAL (CROSS-AI CONTEXT BRIDGE & TOPIC ORGANIZATION)
     // =========================================================================
 
     chooseDestBtn.addEventListener("click", () => {
@@ -707,7 +723,7 @@
       openDestinationChooserModal();
     });
 
-    function openDestinationChooserModal() {
+    function openDestinationChooserModal(customFormatted = null, customBannerText = null) {
       let destModal = document.getElementById("memory-layer-dest-modal");
       if (!destModal) {
         destModal = document.createElement("div");
@@ -719,7 +735,10 @@
       const count = bridge.getCount();
       const currentProvider = currentAdapter.getProviderName();
       const currentTitle = currentAdapter.getCurrentConversationTitle();
-      const formatted = bridge.formatContextPackage();
+      const formatted = customFormatted || bridge.formatContextPackage();
+      const bannerContent = customBannerText
+        ? `🎯 <strong>${customBannerText}</strong> — ${count} turn${count === 1 ? "" : "s"} staged for derived branch.`
+        : `📦 <strong>Selected Context:</strong> ${count} item${count === 1 ? "" : "s"} ready to transfer.`;
 
       // Determine alternate supported AI providers
       const alternateProviders = [];
@@ -751,7 +770,7 @@
           </div>
 
           <div class="dest-summary-banner">
-            📦 <strong>Selected Context:</strong> ${count} item${count === 1 ? "" : "s"} ready to transfer.
+            ${bannerContent}
           </div>
 
           <!-- Exact Context Preview Accordion (Single Authoritative Formatter) -->

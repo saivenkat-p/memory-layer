@@ -294,6 +294,79 @@ class ContextBridge {
       return false;
     }
   }
+
+  // =========================================================================
+  // CHAT-CENTRIC SEARCH SESSION MANAGEMENT (2D NAVIGATION)
+  // =========================================================================
+
+  static get SEARCH_SESSION_KEY() {
+    return "ml_search_session";
+  }
+
+  async saveSearchSession(sessionData) {
+    if (!sessionData) return;
+    const jsonStr = JSON.stringify(sessionData);
+    try {
+      sessionStorage.setItem(ContextBridge.SEARCH_SESSION_KEY, jsonStr);
+    } catch (e) {}
+
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      try {
+        await new Promise((resolve) => {
+          chrome.storage.local.set({ [ContextBridge.SEARCH_SESSION_KEY]: sessionData }, resolve);
+        });
+      } catch (e) {}
+    }
+  }
+
+  async loadSearchSession() {
+    let session = null;
+    // 1. Try sessionStorage
+    try {
+      const raw = sessionStorage.getItem(ContextBridge.SEARCH_SESSION_KEY);
+      if (raw) {
+        session = JSON.parse(raw);
+      }
+    } catch (e) {}
+
+    // 2. Try chrome.storage.local
+    if (!session && typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      try {
+        const stored = await new Promise((resolve) => {
+          chrome.storage.local.get([ContextBridge.SEARCH_SESSION_KEY], resolve);
+        });
+        if (stored && stored[ContextBridge.SEARCH_SESSION_KEY]) {
+          session = stored[ContextBridge.SEARCH_SESSION_KEY];
+          try {
+            sessionStorage.setItem(ContextBridge.SEARCH_SESSION_KEY, JSON.stringify(session));
+          } catch (e) {}
+        }
+      } catch (e) {}
+    }
+
+    if (session && session.active) {
+      // Check freshness (max 2 hours)
+      const age = Date.now() - (session.timestamp || 0);
+      if (age < 2 * 60 * 60 * 1000) {
+        return session;
+      }
+    }
+    return null;
+  }
+
+  async clearSearchSession() {
+    try {
+      sessionStorage.removeItem(ContextBridge.SEARCH_SESSION_KEY);
+    } catch (e) {}
+
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      try {
+        await new Promise((resolve) => {
+          chrome.storage.local.remove([ContextBridge.SEARCH_SESSION_KEY], resolve);
+        });
+      } catch (e) {}
+    }
+  }
 }
 
 // Global instance attached to window for extension content scripts

@@ -74,9 +74,11 @@
     if (existingOverlay) existingOverlay.remove();
     const existingDestModal = document.getElementById("memory-layer-dest-modal");
     if (existingDestModal) existingDestModal.remove();
+    const existingHUD = document.getElementById("ml-inspection-controller");
+    if (existingHUD) existingHUD.remove();
   }
 
-  function initMemoryLayerUI() {
+  async function initMemoryLayerUI() {
     removeMemoryLayerUI();
     console.log("[Memory Layer] Initializing UI elements & DOM observer...");
 
@@ -100,22 +102,35 @@
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
+
+    // Check for active search session to resume Conversation Inspection Mode
+    try {
+      const activeSession = await bridge.loadSearchSession();
+      if (activeSession && activeSession.active && activeSession.conversations && activeSession.conversations.length > 0) {
+        const isFresh = activeSession.timestamp && (Date.now() - activeSession.timestamp < 2 * 60 * 60 * 1000);
+        if (isFresh) {
+          console.log("[Memory Layer] Resuming active search session in Conversation Inspection Mode:", activeSession);
+          openConversationInspectionHUD(activeSession);
+        }
+      }
+    } catch (e) {
+      console.warn("[Memory Layer] Could not check active search session:", e);
+    }
   }
 
   function ensureButtonAttached() {
     if (!isEnabled) return;
     if (document.getElementById("memory-layer-trigger-btn")) return;
 
-    const composer = currentAdapter.getComposer();
-    injectTriggerButton(composer);
+    injectTriggerButton();
   }
 
-  function injectTriggerButton(composer) {
+  function injectTriggerButton() {
     if (document.getElementById("memory-layer-trigger-btn")) return;
 
     const btn = document.createElement("button");
     btn.id = "memory-layer-trigger-btn";
-    btn.className = "memory-layer-floating-btn";
+    btn.className = "memory-layer-floating-btn fixed-position";
     btn.innerHTML = "🧠 Memory Layer";
     btn.type = "button";
     btn.title = "Open Personal AI Memory Layer Search & Context Overlay";
@@ -127,20 +142,8 @@
       toggleOverlayModal();
     });
 
-    // Attachment Strategy:
-    if (composer) {
-      const parentForm = composer.closest("form") || composer.parentElement;
-      if (parentForm) {
-        parentForm.appendChild(btn);
-        console.log("[Memory Layer] Button attached near composer form.");
-        return;
-      }
-    }
-
-    // Fixed Fallback Attachment
-    btn.classList.add("fixed-position");
     document.body.appendChild(btn);
-    console.log("[Memory Layer] Button attached to document.body (fixed position fallback).");
+    console.log("[Memory Layer] Button attached to document.body (guaranteed fixed position).");
   }
 
   function toggleOverlayModal() {
@@ -297,13 +300,10 @@
     // Search Execution
     searchBtn.addEventListener("click", executeSearch);
     searchInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        executeSearch();
-      }
+      if (e.key === "Enter") executeSearch();
     });
 
-    // V6.4 2D Keyboard Navigation Listener
+    // Modal Keyboard Navigation Listener
     overlay.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         const destModal = document.getElementById("memory-layer-dest-modal");
@@ -315,17 +315,17 @@
         return;
       }
 
-      const cards = Array.from(resultsContainer.querySelectorAll(".memory-card"));
+      const cards = Array.from(resultsContainer.querySelectorAll(".conversation-card, .memory-card"));
       if (!cards.length) return;
 
       if (e.key === "ArrowDown") {
         e.preventDefault();
         currentCardIndex = Math.min(currentCardIndex + 1, cards.length - 1);
-        highlightCard(cards, currentCardIndex);
+        highlightModalCard(cards, currentCardIndex);
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         currentCardIndex = Math.max(currentCardIndex - 1, 0);
-        highlightCard(cards, currentCardIndex);
+        highlightModalCard(cards, currentCardIndex);
       } else if (e.key === "ArrowRight" && distinctConversationIds.length > 1) {
         e.preventDefault();
         currentConversationIndex = (currentConversationIndex + 1) % distinctConversationIds.length;
@@ -334,11 +334,18 @@
         e.preventDefault();
         currentConversationIndex = (currentConversationIndex - 1 + distinctConversationIds.length) % distinctConversationIds.length;
         jumpToConversationGroup(cards, distinctConversationIds[currentConversationIndex]);
+      } else if (e.key === "Enter" && currentCardIndex >= 0 && currentCardIndex < cards.length) {
+        const focused = cards[currentCardIndex];
+        const openBtn = focused.querySelector(".btn-open-conv");
+        if (openBtn) {
+          e.preventDefault();
+          openBtn.click();
+        }
       }
     });
 
-    function highlightCard(cards, index) {
-      cards.forEach(c => c.classList.remove("keyboard-focused"));
+    function highlightModalCard(cards, index) {
+      cards.forEach((c) => c.classList.remove("keyboard-focused"));
       if (index >= 0 && index < cards.length) {
         const target = cards[index];
         target.classList.add("keyboard-focused");
@@ -347,12 +354,13 @@
     }
 
     function jumpToConversationGroup(cards, convId) {
-      const targetIndex = cards.findIndex(c => c.getAttribute("data-conv-id") === convId);
+      const targetIndex = cards.findIndex((c) => c.getAttribute("data-conv-id") === convId);
       if (targetIndex !== -1) {
         currentCardIndex = targetIndex;
-        highlightCard(cards, currentCardIndex);
+        highlightModalCard(cards, currentCardIndex);
       }
     }
+
 
     // Initial load
     executeSearch();
@@ -374,19 +382,18 @@
         } else {
           const listRes = await client.listMemories({ type: typeFilter, status: "active", limit: 50, hydrate: true });
           res = {
-            results: (listRes.memories || []).map(m => ({ memory: m, score: 1.0, source_messages: m.source_messages || [] })),
+            results: (listRes.memories || []).map((m) => ({ memory: m, score: 1.0, source_messages: m.source_messages || [] })),
             offline: listRes.offline
           };
         }
         renderStructuredMemoryResults(res, q);
       } else if (activeMode === "current") {
-        // In-Conversation Search Mode
+        // In-Conversation Search Mode: STRICTLY CURRENT CONVERSATION DOM ONLY
         const domMsgs = currentAdapter.readVisibleMessages();
-        const res = await client.searchGlobal(q || "", 15);
-        renderRawSearchResults(res, domMsgs, q);
+        renderCurrentConversationResults(domMsgs, q);
       } else {
-        // Global Raw Messages Mode
-        const res = await client.searchGlobal(q || "", 20);
+        // Global Raw Messages Mode: CHAT-CENTRIC GROUPING
+        const res = await client.searchGlobal(q || "", 30);
         renderRawSearchResults(res, [], q);
       }
     }
@@ -402,13 +409,6 @@
         resultsContainer.innerHTML = `<div class="memory-layer-placeholder">No structured memories found${queryText ? ` matching "${escapeHtml(queryText)}"` : ""}.</div>`;
         return;
       }
-
-      // Collect distinct conversation IDs for cross-conversation navigation
-      const convSet = new Set();
-      results.forEach(r => {
-        if (r.memory && r.memory.conversation_id) convSet.add(r.memory.conversation_id);
-      });
-      distinctConversationIds = Array.from(convSet);
 
       let html = "";
       results.forEach((r, idx) => {
@@ -456,7 +456,7 @@
       resultsContainer.innerHTML = html;
 
       // Bind Provenance Accordion Toggles
-      resultsContainer.querySelectorAll(".btn-toggle-provenance").forEach(btn => {
+      resultsContainer.querySelectorAll(".btn-toggle-provenance").forEach((btn) => {
         btn.addEventListener("click", (e) => {
           e.preventDefault();
           const targetId = btn.getAttribute("data-target");
@@ -470,10 +470,10 @@
       });
 
       // Bind Checkbox Selections (Bridge Integration)
-      resultsContainer.querySelectorAll(".mem-select-checkbox").forEach(cb => {
+      resultsContainer.querySelectorAll(".mem-select-checkbox").forEach((cb) => {
         cb.addEventListener("change", (e) => {
           const memId = e.target.getAttribute("data-id");
-          const match = results.find(r => r.memory.id === memId);
+          const match = results.find((r) => r.memory.id === memId);
           if (e.target.checked && match) {
             bridge.addItem({
               id: memId,
@@ -493,10 +493,10 @@
       });
 
       // Bind Single Insert Buttons (INSERT ONLY, NEVER AUTO-SEND)
-      resultsContainer.querySelectorAll(".btn-insert-single").forEach(btn => {
-        btn.addEventListener("click", (e) => {
+      resultsContainer.querySelectorAll(".btn-insert-single").forEach((btn) => {
+        btn.addEventListener("click", () => {
           const memId = btn.getAttribute("data-id");
-          const match = results.find(r => r.memory.id === memId);
+          const match = results.find((r) => r.memory.id === memId);
           if (match && match.memory) {
             insertFormattedMemory(match.memory, btn);
           }
@@ -524,6 +524,84 @@
       }).join("");
     }
 
+    function renderCurrentConversationResults(domMessages, queryText) {
+      const qLower = (queryText || "").toLowerCase();
+      const domMatches = (domMessages || []).filter((m) => !qLower || (m.content && m.content.toLowerCase().includes(qLower)));
+
+      if (!domMatches.length) {
+        resultsContainer.innerHTML = `<div class="memory-layer-placeholder">No matching messages found in this conversation for "${escapeHtml(queryText)}".</div>`;
+        return;
+      }
+
+      distinctConversationIds = [];
+      const rawItemsMap = new Map();
+      let html = `<div class="results-section-header">📄 Visible Webpage Messages (${domMatches.length} match${domMatches.length === 1 ? "" : "es"})</div>`;
+
+      domMatches.forEach((m, idx) => {
+        const domId = `dom-msg-${m.index !== undefined ? m.index : idx}`;
+        rawItemsMap.set(domId, {
+          id: domId,
+          conversationId: "current-webpage",
+          conversationTitle: currentAdapter.getCurrentConversationTitle(),
+          provider: currentAdapter.getProviderName(),
+          role: m.role || "user",
+          turnIndex: m.index !== undefined ? m.index : idx,
+          content: m.content || "",
+          element: m.element || null
+        });
+
+        const isChecked = bridge.hasItem(domId);
+        html += `
+          <div class="memory-card dom-card" data-conv-id="current-page" data-dom-index="${m.index !== undefined ? m.index : idx}">
+            <div class="card-meta">
+              <span class="role-badge ${m.role}">${m.role}</span>
+              <span class="source-badge">Turn ${m.index !== undefined ? m.index : idx}</span>
+            </div>
+            <div class="card-content">${escapeHtml(m.content.slice(0, 300))}${m.content.length > 300 ? "..." : ""}</div>
+            <div class="card-actions">
+              <label class="select-label">
+                <input type="checkbox" class="raw-select-checkbox" data-id="${escapeAttr(domId)}" ${isChecked ? "checked" : ""}>
+                <span>Select</span>
+              </label>
+              <button type="button" class="insert-btn raw-insert-btn" data-id="${escapeAttr(domId)}">📥 Insert into Prompt</button>
+            </div>
+          </div>
+        `;
+      });
+
+      resultsContainer.innerHTML = html;
+
+      // Event bindings
+      resultsContainer.querySelectorAll(".raw-select-checkbox").forEach((cb) => {
+        cb.addEventListener("change", (e) => {
+          const id = e.target.getAttribute("data-id");
+          const item = rawItemsMap.get(id);
+          if (e.target.checked && item) {
+            bridge.addItem(item);
+          } else {
+            bridge.removeItem(id);
+          }
+          updateSelectionFooter();
+        });
+      });
+
+      resultsContainer.querySelectorAll(".raw-insert-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = btn.getAttribute("data-id");
+          const item = rawItemsMap.get(id);
+          if (item) {
+            const formatted = `[Memory Layer Reference — Turn ${item.turnIndex} (${item.role})]:\n"${item.content}"\n\n`;
+            const inserted = currentAdapter.insertText(formatted);
+            handleInsertFeedback(btn, inserted);
+          }
+        });
+      });
+    }
+
+    // =========================================================================
+    // 3. GLOBAL RAW MESSAGE SEARCH — CHAT-CENTRIC ARCHITECTURE
+    // =========================================================================
+
     function renderRawSearchResults(apiResponse, domMessages, queryText) {
       if (apiResponse && apiResponse.offline) {
         renderOfflineNotice();
@@ -532,119 +610,124 @@
 
       const backendResults = (apiResponse && apiResponse.results) ? apiResponse.results : [];
       if (!backendResults.length && !domMessages.length) {
-        resultsContainer.innerHTML = `<div class="memory-layer-placeholder">No matching raw messages found for "${escapeHtml(queryText)}".</div>`;
+        resultsContainer.innerHTML = `<div class="memory-layer-placeholder">No matching conversations found for "${escapeHtml(queryText)}".</div>`;
         return;
       }
 
-      // Maintain in-memory item lookup map (V6.7 hardening: no large strings in DOM attributes)
-      const rawItemsMap = new Map();
+      // Group all backend matches by conversation_id
+      const convMap = new Map();
 
-      // Collect distinct conversation IDs
-      const convSet = new Set();
-      backendResults.forEach(r => { if (r.conversation_id) convSet.add(r.conversation_id); });
-      distinctConversationIds = Array.from(convSet);
-
-      let html = "";
-
-      // DOM Messages section
-      const domMatches = domMessages.filter(m => m.content && m.content.toLowerCase().includes((queryText || "").toLowerCase()));
-      if (domMatches.length > 0) {
-        html += `<div class="results-section-header">📄 Visible Webpage DOM Messages (${domMatches.length})</div>`;
-        domMatches.forEach((m, idx) => {
-          const domId = `dom-msg-${m.index !== undefined ? m.index : idx}`;
-          rawItemsMap.set(domId, {
-            id: domId,
-            conversationId: "current-webpage",
-            conversationTitle: currentAdapter.getCurrentConversationTitle(),
-            provider: currentAdapter.getProviderName(),
-            role: m.role || "user",
-            turnIndex: m.index !== undefined ? m.index : idx,
-            content: m.content || ""
-          });
-
-          const isChecked = bridge.hasItem(domId);
-          html += `
-            <div class="memory-card dom-card" data-conv-id="current-page">
-              <div class="card-meta">
-                <span class="role-badge ${m.role}">${m.role}</span>
-                <span class="source-badge">Active Webpage</span>
-              </div>
-              <div class="card-content">${escapeHtml(m.content.slice(0, 300))}${m.content.length > 300 ? "..." : ""}</div>
-              <div class="card-actions">
-                <label class="select-label">
-                  <input type="checkbox" class="raw-select-checkbox" data-id="${escapeAttr(domId)}" ${isChecked ? "checked" : ""}>
-                  <span>Select</span>
-                </label>
-                <button type="button" class="insert-btn raw-insert-btn" data-id="${escapeAttr(domId)}">📥 Insert into Prompt</button>
-              </div>
-            </div>
-          `;
-        });
-      }
-
-      // Backend Indexed History section
-      if (backendResults.length > 0) {
-        html += `<div class="results-section-header">🧠 Memory Layer Database Matches (${backendResults.length})</div>`;
-        backendResults.forEach((r, idx) => {
-          const scoreStr = r.score ? `${Math.round(r.score * 100)}%` : "";
-          const snippet = r.snippet || r.matched_content || "";
-          const rawId = r.matched_message_id || `raw-msg-${r.conversation_id}-${idx}`;
-          rawItemsMap.set(rawId, {
-            id: rawId,
-            conversationId: r.conversation_id || "conv",
-            conversationTitle: r.conversation_title || "Conversation",
+      backendResults.forEach((r, idx) => {
+        const cid = r.conversation_id || `conv-${idx}`;
+        if (!convMap.has(cid)) {
+          convMap.set(cid, {
+            conversationId: cid,
+            conversationTitle: r.conversation_title || cid,
             provider: r.source || "AI",
-            role: r.matched_role || "assistant",
-            turnIndex: r.matched_message_index !== undefined ? r.matched_message_index : idx,
-            content: r.context_text || r.matched_content || snippet
+            conversationUrl: r.conversation_url || null,
+            score: r.score || 0,
+            matches: []
           });
+        }
 
-          const isChecked = bridge.hasItem(rawId);
-          html += `
-            <div class="memory-card" data-conv-id="${escapeAttr(r.conversation_id || "conv")}">
-              <div class="card-meta">
-                <span class="role-badge ${r.matched_role || "assistant"}">${r.matched_role || "msg"}</span>
-                <span class="conv-title">${escapeHtml(r.conversation_title || "Conversation")}</span>
-                <span class="provider-badge">${escapeHtml(r.source || "AI")}</span>
-                ${scoreStr ? `<span class="score-badge">${scoreStr}</span>` : ""}
-              </div>
-              <div class="card-content">${escapeHtml(snippet)}</div>
-              <div class="card-actions">
-                <label class="select-label">
-                  <input type="checkbox" class="raw-select-checkbox" data-id="${escapeAttr(rawId)}" ${isChecked ? "checked" : ""}>
-                  <span>Select</span>
-                </label>
-                <button type="button" class="insert-btn raw-insert-btn" data-id="${escapeAttr(rawId)}">📥 Insert into Prompt</button>
-              </div>
-            </div>
-          `;
-        });
-      }
+        const entry = convMap.get(cid);
+        if (r.score && r.score > entry.score) {
+          entry.score = r.score;
+        }
 
-      resultsContainer.innerHTML = html;
-
-      // Bind Raw Checkbox Selections (Bridge Integration with In-Memory Lookup)
-      resultsContainer.querySelectorAll(".raw-select-checkbox").forEach(cb => {
-        cb.addEventListener("change", (e) => {
-          const itemId = cb.getAttribute("data-id");
-          const item = rawItemsMap.get(itemId);
-          if (cb.checked && item) {
-            bridge.addItem(item);
-          } else {
-            bridge.removeItem(itemId);
-          }
-          updateSelectionFooter();
+        entry.matches.push({
+          messageId: r.matched_message_id || `raw-msg-${cid}-${idx}`,
+          turnIndex: r.matched_message_index !== undefined ? r.matched_message_index : idx,
+          role: r.matched_role || "assistant",
+          content: r.context_text || r.matched_content || r.snippet || "",
+          snippet: r.snippet || r.matched_content || "",
+          score: r.score || 0
         });
       });
 
-      // Bind Raw Insert Buttons (INSERT ONLY, NEVER AUTO-SEND)
-      resultsContainer.querySelectorAll(".raw-insert-btn").forEach(btn => {
-        btn.addEventListener("click", (e) => {
-          const itemId = btn.getAttribute("data-id");
-          const item = rawItemsMap.get(itemId);
-          if (item && item.content) {
-            const inserted = currentAdapter.insertText(`[Memory Layer Reference Context]:\n${item.content}\n\n`);
-            handleInsertFeedback(btn, inserted);
+      const matchedConversations = Array.from(convMap.values());
+      // Sort conversations by relevance score descending
+      matchedConversations.sort((a, b) => b.score - a.score);
+
+      let html = `<div class="results-section-header">💬 Matched Conversations (${matchedConversations.length})</div>`;
+
+      matchedConversations.forEach((conv, cIdx) => {
+        const scoreStr = conv.score ? `${Math.round(conv.score * 100)}% relevance` : "";
+        const matchCountStr = `${conv.matches.length} matching occurrence${conv.matches.length === 1 ? "" : "s"}`;
+        const providerIcon = getProviderIcon(conv.provider);
+
+        // Preview of first 1-2 snippets
+        const previewSnippets = conv.matches.slice(0, 2).map((m) => `
+          <div class="conv-preview-item">
+            <span class="conv-preview-role">[Turn ${m.turnIndex} ${m.role}]:</span>
+            <span>"${escapeHtml(m.snippet || m.content.slice(0, 120))}"</span>
+          </div>
+        `).join("");
+
+        html += `
+          <div class="conversation-card" data-conv-index="${cIdx}" data-conv-id="${escapeAttr(conv.conversationId)}">
+            <div class="conv-card-header">
+              <div class="conv-card-title-group">
+                <span class="conv-icon">📄</span>
+                <span class="conv-card-title" title="${escapeAttr(conv.conversationTitle)}">${escapeHtml(conv.conversationTitle)}</span>
+              </div>
+              <div class="conv-card-badges">
+                <span class="provider-badge">${providerIcon} ${escapeHtml(conv.provider)}</span>
+                ${scoreStr ? `<span class="score-badge">${scoreStr}</span>` : ""}
+                <span class="match-count-badge">${matchCountStr}</span>
+              </div>
+            </div>
+
+            <div class="conv-card-preview">
+              ${previewSnippets}
+            </div>
+
+            <div class="conv-card-actions">
+              <button type="button" class="btn-open-conv" data-conv-index="${cIdx}">
+                Open Conversation →
+              </button>
+            </div>
+          </div>
+        `;
+      });
+
+      resultsContainer.innerHTML = html;
+
+      // Event listener for clicking conversation cards / Open Conversation
+      resultsContainer.querySelectorAll(".conversation-card").forEach((card) => {
+        card.addEventListener("click", async () => {
+          const cIdx = parseInt(card.getAttribute("data-conv-index"), 10);
+          if (isNaN(cIdx) || !matchedConversations[cIdx]) return;
+
+          const targetConv = matchedConversations[cIdx];
+          const session = {
+            query: queryText,
+            conversations: matchedConversations,
+            currentConversationIndex: cIdx,
+            currentOccurrenceIndex: 0,
+            active: true,
+            timestamp: Date.now()
+          };
+
+          // Save search session for persistence across navigation
+          await bridge.saveSearchSession(session);
+
+          // Hide global search modal
+          overlay.classList.add("hidden");
+
+          // Determine if destination is already active on current page
+          const isSameChat = isCurrentPageMatch(targetConv);
+          if (isSameChat) {
+            openConversationInspectionHUD(session);
+          } else {
+            // Navigate to destination conversation
+            const destUrl = getConversationDestinationUrl(targetConv);
+            if (destUrl) {
+              window.location.href = destUrl;
+            } else {
+              // Fallback to in-page inspection if no URL available
+              openConversationInspectionHUD(session);
+            }
           }
         });
       });
@@ -723,187 +806,522 @@
       openDestinationChooserModal();
     });
 
-    function openDestinationChooserModal(customFormatted = null, customBannerText = null) {
-      let destModal = document.getElementById("memory-layer-dest-modal");
-      if (!destModal) {
-        destModal = document.createElement("div");
-        destModal.id = "memory-layer-dest-modal";
-        destModal.className = "memory-layer-modal-overlay dest-modal-layer";
-        document.body.appendChild(destModal);
-      }
-
-      const count = bridge.getCount();
-      const currentProvider = currentAdapter.getProviderName();
-      const currentTitle = currentAdapter.getCurrentConversationTitle();
-      const formatted = customFormatted || bridge.formatContextPackage();
-      const bannerContent = customBannerText
-        ? `🎯 <strong>${customBannerText}</strong> — ${count} turn${count === 1 ? "" : "s"} staged for derived branch.`
-        : `📦 <strong>Selected Context:</strong> ${count} item${count === 1 ? "" : "s"} ready to transfer.`;
-
-      // Determine alternate supported AI providers
-      const alternateProviders = [];
-      if (currentProvider !== "ChatGPT") {
-        alternateProviders.push({ key: "chatgpt", name: "ChatGPT", host: "chatgpt.com" });
-      }
-      if (currentProvider !== "Claude") {
-        alternateProviders.push({ key: "claude", name: "Claude", host: "claude.ai" });
-      }
-      if (currentProvider !== "Gemini") {
-        alternateProviders.push({ key: "gemini", name: "Gemini", host: "gemini.google.com" });
-      }
-
-      const altOptionsHtml = alternateProviders.map(p => `
-        <label class="dest-option-card">
-          <input type="radio" name="ml_dest_choice" value="alt_${p.key}">
-          <div class="dest-option-info">
-            <div class="dest-option-title">✨ Open in ${p.name} (${p.host})</div>
-            <div class="dest-option-desc">Opens ${p.name} in a new tab with staged context ready for insertion.</div>
-          </div>
-        </label>
-      `).join("");
-
-      destModal.innerHTML = `
-        <div class="dest-chooser-container">
-          <div class="dest-chooser-header">
-            <h3>🎯 Cross-AI Destination Chooser</h3>
-            <button type="button" class="memory-layer-close-btn" id="ml-close-dest-modal">✕</button>
-          </div>
-
-          <div class="dest-summary-banner">
-            ${bannerContent}
-          </div>
-
-          <!-- Exact Context Preview Accordion (Single Authoritative Formatter) -->
-          <div class="dest-preview-toggle" id="ml-toggle-preview">
-            <span>👁️ Preview Formatted Context (${count} items)</span>
-            <span id="ml-preview-arrow">▾</span>
-          </div>
-          <pre class="dest-preview-box hidden" id="ml-preview-box">${escapeHtml(formatted)}</pre>
-
-          <div class="dest-options-list">
-            <label class="dest-option-card active">
-              <input type="radio" name="ml_dest_choice" value="current" checked>
-              <div class="dest-option-info">
-                <div class="dest-option-title">💬 Apply to Active Chat (${currentProvider})</div>
-                <div class="dest-option-desc">Inserts context directly into current composer: <em>"${escapeHtml(currentTitle)}"</em>.</div>
-              </div>
-            </label>
-
-            <label class="dest-option-card">
-              <input type="radio" name="ml_dest_choice" value="new">
-              <div class="dest-option-info">
-                <div class="dest-option-title">✨ Start New Chat on ${currentProvider}</div>
-                <div class="dest-option-desc">Opens a fresh conversation session on ${currentProvider} and auto-injects context.</div>
-              </div>
-            </label>
-
-            ${altOptionsHtml}
-
-            <label class="dest-option-card">
-              <input type="radio" name="ml_dest_choice" value="copy">
-              <div class="dest-option-info">
-                <div class="dest-option-title">📋 Copy Context Package to Clipboard</div>
-                <div class="dest-option-desc">Copies clean, formatted Markdown with provenance citations to paste across any AI tool.</div>
-              </div>
-            </label>
-          </div>
-
-          <div class="dest-chooser-footer">
-            <button type="button" class="btn-clear-selection" id="ml-cancel-dest-btn">Cancel</button>
-            <button type="button" class="btn-apply-dest" id="ml-execute-dest-btn">🚀 Apply Context</button>
-          </div>
-        </div>
-      `;
-
-      destModal.classList.remove("hidden");
-
-      // Bind Preview Toggle
-      const previewToggle = document.getElementById("ml-toggle-preview");
-      const previewBox = document.getElementById("ml-preview-box");
-      const previewArrow = document.getElementById("ml-preview-arrow");
-
-      if (previewToggle && previewBox && previewArrow) {
-        previewToggle.addEventListener("click", () => {
-          const isHidden = previewBox.classList.contains("hidden");
-          if (isHidden) {
-            previewBox.classList.remove("hidden");
-            previewArrow.textContent = "▴";
-          } else {
-            previewBox.classList.add("hidden");
-            previewArrow.textContent = "▾";
-          }
-        });
-      }
-
-      // Bind Dest Modal Events
-      document.getElementById("ml-close-dest-modal").addEventListener("click", () => {
-        destModal.classList.add("hidden");
-      });
-      document.getElementById("ml-cancel-dest-btn").addEventListener("click", () => {
-        destModal.classList.add("hidden");
-      });
-
-      destModal.querySelectorAll(".dest-option-card").forEach(card => {
-        card.addEventListener("click", () => {
-          destModal.querySelectorAll(".dest-option-card").forEach(c => c.classList.remove("active"));
-          card.classList.add("active");
-          const radio = card.querySelector('input[type="radio"]');
-          if (radio) radio.checked = true;
-        });
-      });
-
-      document.getElementById("ml-execute-dest-btn").addEventListener("click", async () => {
-        const selectedRadio = destModal.querySelector('input[name="ml_dest_choice"]:checked');
-        const choice = selectedRadio ? selectedRadio.value : "current";
-        const executeBtn = document.getElementById("ml-execute-dest-btn");
-
-        if (choice === "current") {
-          const inserted = bridge.applyToCurrentChat(currentAdapter, formatted);
-          destModal.classList.add("hidden");
-          overlay.classList.add("hidden");
-          if (inserted) {
-            console.log("[ContextBridge] Context applied to active chat.");
-          }
-        } else if (choice === "new") {
-          destModal.classList.add("hidden");
-          overlay.classList.add("hidden");
-          bridge.applyToNewChat(currentAdapter, formatted);
-        } else if (choice.startsWith("alt_")) {
-          const targetKey = choice.replace("alt_", "");
-          destModal.classList.add("hidden");
-          overlay.classList.add("hidden");
-          await bridge.applyToAlternateProvider(targetKey, formatted);
-        } else if (choice === "copy") {
-          const copied = await bridge.copyToClipboard(formatted);
-          if (copied) {
-            executeBtn.textContent = "✅ Copied to Clipboard!";
-            setTimeout(() => {
-              destModal.classList.add("hidden");
-            }, 1200);
-          }
-        }
-      });
-    }
-
     function insertFormattedMemory(memory, btnElement) {
       const typeInfo = getTypeBadgeInfo(memory.memory_type);
       const formatted = `[Memory Layer Reference — ${typeInfo.label}]:\n"${memory.content}" (Source: ${memory.conversation_id})\n\n`;
       const inserted = currentAdapter.insertText(formatted);
       handleInsertFeedback(btnElement, inserted);
     }
+  }
 
-    function handleInsertFeedback(btn, success, customSuccessText = "✅ Inserted into Composer!") {
-      if (success) {
-        const origText = btn.textContent;
-        btn.textContent = customSuccessText;
-        btn.style.backgroundColor = "#059669";
-        setTimeout(() => {
-          btn.textContent = origText;
-          btn.style.backgroundColor = "";
-        }, 2200);
-      } else {
-        alert("Could not locate composer text area. Please click into the chat prompt box and try again.");
+  // =========================================================================
+  // 4. FLOATING CONVERSATION INSPECTION CONTROLLER (HUD) & 2D NAVIGATION
+  // =========================================================================
+
+  let inspectionKeydownListener = null;
+
+  async function openConversationInspectionHUD(session) {
+    if (!session || !session.conversations || !session.conversations.length) return;
+
+    let hud = document.getElementById("ml-inspection-controller");
+    if (!hud) {
+      hud = document.createElement("div");
+      hud.id = "ml-inspection-controller";
+      hud.className = "ml-inspection-controller";
+      document.body.appendChild(hud);
+    }
+    hud.classList.remove("hidden");
+
+    let convIdx = session.currentConversationIndex || 0;
+    if (convIdx < 0 || convIdx >= session.conversations.length) convIdx = 0;
+
+    const currentConv = session.conversations[convIdx];
+    const matches = currentConv.matches || [];
+    let occIdx = session.currentOccurrenceIndex || 0;
+    if (occIdx < 0 || occIdx >= matches.length) occIdx = 0;
+
+    const currentMatch = matches[occIdx] || {
+      messageId: `msg-${convIdx}-${occIdx}`,
+      turnIndex: occIdx,
+      role: "assistant",
+      content: "",
+      snippet: ""
+    };
+
+    const isChecked = bridge.hasItem(currentMatch.messageId);
+    const providerIcon = getProviderIcon(currentConv.provider);
+
+    hud.innerHTML = `
+      <div class="ml-inspect-header">
+        <div class="ml-inspect-title">
+          <span class="ml-inspect-icon">🔎</span>
+          <span>Topic:</span>
+          <span class="ml-inspect-query">"${escapeHtml(session.query || "Search")}"</span>
+        </div>
+        <div class="ml-inspect-actions">
+          <button type="button" id="ml-reopen-search-btn" class="ml-btn-back" title="Back to Global Search Results">🔍 Results</button>
+          <button type="button" id="ml-close-inspect-btn" class="ml-btn-close" title="Exit Inspection Mode (Esc)">✕</button>
+        </div>
+      </div>
+
+      <div class="ml-inspect-body">
+        <div class="ml-inspect-chat-info">
+          <span class="ml-conv-tag">${providerIcon} ${escapeHtml(currentConv.provider)}</span>
+          <strong class="ml-conv-name" title="${escapeAttr(currentConv.conversationTitle)}">${escapeHtml(currentConv.conversationTitle)}</strong>
+        </div>
+
+        <div class="ml-inspect-nav-bar">
+          <!-- Conversation Navigation (<- / ->) -->
+          <div class="ml-nav-group conv-nav">
+            <button type="button" class="ml-nav-btn" id="ml-prev-conv-btn" title="Previous Matched Chat (←)" ${convIdx <= 0 ? "disabled" : ""}>← Prev Chat</button>
+            <span class="ml-nav-counter">Chat ${convIdx + 1} / ${session.conversations.length}</span>
+            <button type="button" class="ml-nav-btn" id="ml-next-conv-btn" title="Next Matched Chat (→)" ${convIdx >= session.conversations.length - 1 ? "disabled" : ""}>Next Chat →</button>
+          </div>
+
+          <!-- Occurrence Navigation (Up / Down) -->
+          <div class="ml-nav-group occ-nav">
+            <button type="button" class="ml-nav-btn" id="ml-prev-occ-btn" title="Previous Match (↑)" ${occIdx <= 0 ? "disabled" : ""}>↑ Prev Match</button>
+            <span class="ml-nav-counter">Match ${occIdx + 1} / ${Math.max(matches.length, 1)}</span>
+            <button type="button" class="ml-nav-btn" id="ml-next-occ-btn" title="Next Match (↓)" ${occIdx >= matches.length - 1 ? "disabled" : ""}>Next Match ↓</button>
+          </div>
+        </div>
+
+        <!-- Occurrence Details Card -->
+        <div class="ml-occurrence-card">
+          <div class="ml-occ-meta">
+            <span class="role-badge ${currentMatch.role || "assistant"}">${escapeHtml(currentMatch.role || "message")}</span>
+            <span class="ml-turn-badge">Turn ${currentMatch.turnIndex !== undefined ? currentMatch.turnIndex : occIdx}</span>
+            ${currentMatch.score ? `<span class="score-badge">${Math.round(currentMatch.score * 100)}%</span>` : ""}
+          </div>
+          <div class="ml-occ-text">${escapeHtml(currentMatch.snippet || currentMatch.content || "No message snippet available")}</div>
+          <div class="ml-occ-actions">
+            <label class="select-label">
+              <input type="checkbox" id="ml-occ-checkbox" data-id="${escapeAttr(currentMatch.messageId)}" ${isChecked ? "checked" : ""}>
+              <span>Select this message</span>
+            </label>
+            <button type="button" id="ml-occ-insert-btn" class="insert-btn">📥 Insert into Prompt</button>
+            <button type="button" id="ml-occ-dest-btn" class="btn-choose-dest">🎯 Apply to Destination...</button>
+          </div>
+        </div>
+
+        <div class="ml-2d-hints">
+          <span><strong>↑ / ↓</strong>: Occurrences</span> • <span><strong>← / →</strong>: Matched Chats</span>
+        </div>
+      </div>
+    `;
+
+    // Highlight & smooth scroll active host message
+    if (matches.length > 0) {
+      currentAdapter.scrollToMessage(currentMatch);
+    }
+
+    // Bind HUD events
+    document.getElementById("ml-close-inspect-btn").addEventListener("click", () => {
+      hud.classList.add("hidden");
+      session.active = false;
+      bridge.saveSearchSession(session);
+    });
+
+    document.getElementById("ml-reopen-search-btn").addEventListener("click", () => {
+      hud.classList.add("hidden");
+      toggleOverlayModal(session.query, "global");
+    });
+
+    // Occurrence Navigation Buttons (↑ / ↓)
+    const prevOccBtn = document.getElementById("ml-prev-occ-btn");
+    const nextOccBtn = document.getElementById("ml-next-occ-btn");
+
+    if (prevOccBtn) {
+      prevOccBtn.addEventListener("click", () => {
+        if (occIdx > 0) {
+          session.currentOccurrenceIndex = occIdx - 1;
+          bridge.saveSearchSession(session);
+          openConversationInspectionHUD(session);
+        }
+      });
+    }
+
+    if (nextOccBtn) {
+      nextOccBtn.addEventListener("click", () => {
+        if (occIdx < matches.length - 1) {
+          session.currentOccurrenceIndex = occIdx + 1;
+          bridge.saveSearchSession(session);
+          openConversationInspectionHUD(session);
+        }
+      });
+    }
+
+    // Conversation Navigation Buttons (← / →)
+    const prevConvBtn = document.getElementById("ml-prev-conv-btn");
+    const nextConvBtn = document.getElementById("ml-next-conv-btn");
+
+    if (prevConvBtn) {
+      prevConvBtn.addEventListener("click", () => {
+        if (convIdx > 0) {
+          navigateToSessionConversation(session, convIdx - 1);
+        }
+      });
+    }
+
+    if (nextConvBtn) {
+      nextConvBtn.addEventListener("click", () => {
+        if (convIdx < session.conversations.length - 1) {
+          navigateToSessionConversation(session, convIdx + 1);
+        }
+      });
+    }
+
+    // Message Selection Checkbox
+    const occCheckbox = document.getElementById("ml-occ-checkbox");
+    if (occCheckbox) {
+      occCheckbox.addEventListener("change", (e) => {
+        if (e.target.checked) {
+          bridge.addItem({
+            id: currentMatch.messageId,
+            conversationId: currentConv.conversationId,
+            conversationTitle: currentConv.conversationTitle,
+            provider: currentConv.provider,
+            role: currentMatch.role || "assistant",
+            turnIndex: currentMatch.turnIndex,
+            content: currentMatch.content || currentMatch.snippet || ""
+          });
+        } else {
+          bridge.removeItem(currentMatch.messageId);
+        }
+      });
+    }
+
+    // Message-Level Insert into Prompt Button (INSERT ONLY, NEVER AUTO-SEND)
+    const insertBtn = document.getElementById("ml-occ-insert-btn");
+    if (insertBtn) {
+      insertBtn.addEventListener("click", () => {
+        const textToInsert = currentMatch.content || currentMatch.snippet || "";
+        if (textToInsert) {
+          const formatted = `[Memory Layer Reference — Turn ${currentMatch.turnIndex} (${currentMatch.role})]:\n"${textToInsert}"\n\n`;
+          const inserted = currentAdapter.insertText(formatted);
+          handleInsertFeedback(insertBtn, inserted);
+        }
+      });
+    }
+
+    // Message-Level Apply to Destination Button
+    const destBtn = document.getElementById("ml-occ-dest-btn");
+    if (destBtn) {
+      destBtn.addEventListener("click", () => {
+        if (!bridge.hasItem(currentMatch.messageId)) {
+          bridge.addItem({
+            id: currentMatch.messageId,
+            conversationId: currentConv.conversationId,
+            conversationTitle: currentConv.conversationTitle,
+            provider: currentConv.provider,
+            role: currentMatch.role || "assistant",
+            turnIndex: currentMatch.turnIndex,
+            content: currentMatch.content || currentMatch.snippet || ""
+          });
+        }
+        openDestinationChooserModal();
+      });
+    }
+
+    // Attach 2D Keyboard Navigation Listener
+    if (inspectionKeydownListener) {
+      window.removeEventListener("keydown", inspectionKeydownListener);
+    }
+
+    inspectionKeydownListener = (e) => {
+      // Don't intercept if user is typing in a textarea, input, or contenteditable
+      const target = e.target;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
       }
+
+      if (hud.classList.contains("hidden")) return;
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (occIdx < matches.length - 1) {
+          session.currentOccurrenceIndex = occIdx + 1;
+          bridge.saveSearchSession(session);
+          openConversationInspectionHUD(session);
+        }
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (occIdx > 0) {
+          session.currentOccurrenceIndex = occIdx - 1;
+          bridge.saveSearchSession(session);
+          openConversationInspectionHUD(session);
+        }
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        if (convIdx < session.conversations.length - 1) {
+          navigateToSessionConversation(session, convIdx + 1);
+        }
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        if (convIdx > 0) {
+          navigateToSessionConversation(session, convIdx - 1);
+        }
+      } else if (e.key === "Escape") {
+        hud.classList.add("hidden");
+        session.active = false;
+        bridge.saveSearchSession(session);
+      }
+    };
+
+    window.addEventListener("keydown", inspectionKeydownListener);
+  }
+
+  async function navigateToSessionConversation(session, newConvIndex) {
+    session.currentConversationIndex = newConvIndex;
+    session.currentOccurrenceIndex = 0;
+    session.active = true;
+    session.timestamp = Date.now();
+    await bridge.saveSearchSession(session);
+
+    const targetConv = session.conversations[newConvIndex];
+    if (isCurrentPageMatch(targetConv)) {
+      openConversationInspectionHUD(session);
+    } else {
+      const destUrl = getConversationDestinationUrl(targetConv);
+      if (destUrl) {
+        window.location.href = destUrl;
+      } else {
+        openConversationInspectionHUD(session);
+      }
+    }
+  }
+
+  function isCurrentPageMatch(targetConv) {
+    if (!targetConv) return false;
+    const currentProvider = currentAdapter.getProviderName().toLowerCase();
+    const targetProvider = (targetConv.provider || "").toLowerCase();
+    if (!targetProvider.includes(currentProvider) && !currentProvider.includes(targetProvider)) {
+      return false;
+    }
+
+    const currentTitle = currentAdapter.getCurrentConversationTitle().toLowerCase();
+    const targetTitle = (targetConv.conversationTitle || "").toLowerCase();
+    if (targetTitle && currentTitle && (currentTitle.includes(targetTitle) || targetTitle.includes(currentTitle))) {
+      return true;
+    }
+
+    const currentUrl = window.location.href;
+    if (targetConv.conversationId && currentUrl.includes(targetConv.conversationId)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function getConversationDestinationUrl(conv) {
+    if (!conv) return null;
+    if (conv.conversationUrl && (conv.conversationUrl.startsWith("http://") || conv.conversationUrl.startsWith("https://"))) {
+      return conv.conversationUrl;
+    }
+    const provider = (conv.provider || "").toLowerCase();
+    const cid = conv.conversationId || "";
+
+    if (provider.includes("chatgpt") || provider.includes("openai")) {
+      const uuidMatch = cid.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+      return uuidMatch ? `https://chatgpt.com/c/${uuidMatch[1]}` : "https://chatgpt.com/";
+    }
+    if (provider.includes("gemini") || provider.includes("google")) {
+      const hexMatch = cid.match(/^gemini-([a-f0-9]{16,})$/i) || cid.match(/^([a-f0-9]{16,})$/i);
+      return hexMatch ? `https://gemini.google.com/app/${hexMatch[1]}` : "https://gemini.google.com/app";
+    }
+    if (provider.includes("claude") || provider.includes("anthropic")) {
+      const uuidMatch = cid.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+      return uuidMatch ? `https://claude.ai/chat/${uuidMatch[1]}` : "https://claude.ai/new";
+    }
+    return null;
+  }
+
+  function getProviderIcon(provider) {
+    const p = (provider || "").toLowerCase();
+    if (p.includes("chatgpt") || p.includes("openai")) return "🤖";
+    if (p.includes("gemini") || p.includes("google")) return "✨";
+    if (p.includes("claude") || p.includes("anthropic")) return "🧠";
+    return "🌐";
+  }
+
+  // =========================================================================
+  // 5. DESTINATION CHOOSER MODAL (CROSS-AI CONTEXT BRIDGE)
+  // =========================================================================
+
+  function openDestinationChooserModal(customFormatted = null, customBannerText = null) {
+    let destModal = document.getElementById("memory-layer-dest-modal");
+    if (!destModal) {
+      destModal = document.createElement("div");
+      destModal.id = "memory-layer-dest-modal";
+      destModal.className = "memory-layer-modal-overlay dest-modal-layer";
+      document.body.appendChild(destModal);
+    }
+
+    const count = bridge.getCount();
+    const currentProvider = currentAdapter.getProviderName();
+    const currentTitle = currentAdapter.getCurrentConversationTitle();
+    const formatted = customFormatted || bridge.formatContextPackage();
+    const bannerContent = customBannerText
+      ? `🎯 <strong>${customBannerText}</strong> — ${count} turn${count === 1 ? "" : "s"} staged for derived branch.`
+      : `📦 <strong>Selected Context:</strong> ${count} item${count === 1 ? "" : "s"} ready to transfer.`;
+
+    // Determine alternate supported AI providers
+    const alternateProviders = [];
+    if (currentProvider !== "ChatGPT") {
+      alternateProviders.push({ key: "chatgpt", name: "ChatGPT", host: "chatgpt.com" });
+    }
+    if (currentProvider !== "Claude") {
+      alternateProviders.push({ key: "claude", name: "Claude", host: "claude.ai" });
+    }
+    if (currentProvider !== "Gemini") {
+      alternateProviders.push({ key: "gemini", name: "Gemini", host: "gemini.google.com" });
+    }
+
+    const altOptionsHtml = alternateProviders.map((p) => `
+      <label class="dest-option-card">
+        <input type="radio" name="ml_dest_choice" value="alt_${p.key}">
+        <div class="dest-option-info">
+          <div class="dest-option-title">✨ Open in ${p.name} (${p.host})</div>
+          <div class="dest-option-desc">Opens ${p.name} in a new tab with staged context ready for insertion.</div>
+        </div>
+      </label>
+    `).join("");
+
+    destModal.innerHTML = `
+      <div class="dest-chooser-container">
+        <div class="dest-chooser-header">
+          <h3>🎯 Cross-AI Destination Chooser</h3>
+          <button type="button" class="memory-layer-close-btn" id="ml-close-dest-modal">✕</button>
+        </div>
+
+        <div class="dest-summary-banner">
+          ${bannerContent}
+        </div>
+
+        <!-- Exact Context Preview Accordion -->
+        <div class="dest-preview-toggle" id="ml-toggle-preview">
+          <span>👁️ Preview Formatted Context (${count} items)</span>
+          <span id="ml-preview-arrow">▾</span>
+        </div>
+        <pre class="dest-preview-box hidden" id="ml-preview-box">${escapeHtml(formatted)}</pre>
+
+        <div class="dest-options-list">
+          <label class="dest-option-card active">
+            <input type="radio" name="ml_dest_choice" value="current" checked>
+            <div class="dest-option-info">
+              <div class="dest-option-title">💬 Apply to Active Chat (${currentProvider})</div>
+              <div class="dest-option-desc">Inserts context directly into current composer: <em>"${escapeHtml(currentTitle)}"</em>.</div>
+            </div>
+          </label>
+
+          <label class="dest-option-card">
+            <input type="radio" name="ml_dest_choice" value="new">
+            <div class="dest-option-info">
+              <div class="dest-option-title">✨ Start New Chat on ${currentProvider}</div>
+              <div class="dest-option-desc">Opens a fresh conversation session on ${currentProvider} and auto-injects context.</div>
+            </div>
+          </label>
+
+          ${altOptionsHtml}
+
+          <label class="dest-option-card">
+            <input type="radio" name="ml_dest_choice" value="copy">
+            <div class="dest-option-info">
+              <div class="dest-option-title">📋 Copy Context Package to Clipboard</div>
+              <div class="dest-option-desc">Copies clean, formatted Markdown with provenance citations to paste across any AI tool.</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="dest-chooser-footer">
+          <button type="button" class="btn-clear-selection" id="ml-cancel-dest-btn">Cancel</button>
+          <button type="button" class="btn-apply-dest" id="ml-execute-dest-btn">🚀 Apply Context</button>
+        </div>
+      </div>
+    `;
+
+    destModal.classList.remove("hidden");
+
+    // Bind Preview Toggle
+    const previewToggle = document.getElementById("ml-toggle-preview");
+    const previewBox = document.getElementById("ml-preview-box");
+    const previewArrow = document.getElementById("ml-preview-arrow");
+
+    if (previewToggle && previewBox && previewArrow) {
+      previewToggle.addEventListener("click", () => {
+        const isHidden = previewBox.classList.contains("hidden");
+        if (isHidden) {
+          previewBox.classList.remove("hidden");
+          previewArrow.textContent = "▴";
+        } else {
+          previewBox.classList.add("hidden");
+          previewArrow.textContent = "▾";
+        }
+      });
+    }
+
+    // Bind Dest Modal Events
+    document.getElementById("ml-close-dest-modal").addEventListener("click", () => {
+      destModal.classList.add("hidden");
+    });
+    document.getElementById("ml-cancel-dest-btn").addEventListener("click", () => {
+      destModal.classList.add("hidden");
+    });
+
+    destModal.querySelectorAll(".dest-option-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        destModal.querySelectorAll(".dest-option-card").forEach((c) => c.classList.remove("active"));
+        card.classList.add("active");
+        const radio = card.querySelector('input[type="radio"]');
+        if (radio) radio.checked = true;
+      });
+    });
+
+    document.getElementById("ml-execute-dest-btn").addEventListener("click", async () => {
+      const selectedRadio = destModal.querySelector('input[name="ml_dest_choice"]:checked');
+      const choice = selectedRadio ? selectedRadio.value : "current";
+      const executeBtn = document.getElementById("ml-execute-dest-btn");
+      const overlay = document.getElementById("memory-layer-overlay");
+
+      if (choice === "current") {
+        const inserted = bridge.applyToCurrentChat(currentAdapter, formatted);
+        destModal.classList.add("hidden");
+        if (overlay) overlay.classList.add("hidden");
+        if (inserted) {
+          console.log("[ContextBridge] Context applied to active chat.");
+        }
+      } else if (choice === "new") {
+        destModal.classList.add("hidden");
+        if (overlay) overlay.classList.add("hidden");
+        bridge.applyToNewChat(currentAdapter, formatted);
+      } else if (choice.startsWith("alt_")) {
+        const targetKey = choice.replace("alt_", "");
+        destModal.classList.add("hidden");
+        if (overlay) overlay.classList.add("hidden");
+        await bridge.applyToAlternateProvider(targetKey, formatted);
+      } else if (choice === "copy") {
+        const copied = await bridge.copyToClipboard(formatted);
+        if (copied) {
+          executeBtn.textContent = "✅ Copied to Clipboard!";
+          setTimeout(() => {
+            destModal.classList.add("hidden");
+          }, 1200);
+        }
+      }
+    });
+  }
+
+  function handleInsertFeedback(btn, success, customSuccessText = "✅ Inserted into Composer!") {
+    if (success) {
+      const origText = btn.textContent;
+      btn.textContent = customSuccessText;
+      btn.style.backgroundColor = "#059669";
+      setTimeout(() => {
+        btn.textContent = origText;
+        btn.style.backgroundColor = "";
+      }, 2200);
+    } else {
+      alert("Could not locate composer text area. Please click into the chat prompt box and try again.");
     }
   }
 
@@ -917,3 +1335,4 @@
     return String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 })();
+

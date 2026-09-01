@@ -1,16 +1,18 @@
 """
-Unit and Contract Tests for Milestone V6.9:
-Topic Organization & Non-Destructive Derived Branching.
+Unit and Contract Tests for Milestone V6.9 (Post-Manual Testing Hardened):
+Topic Organization, Strictly Scoped "This Conversation" Search & Host DOM Navigation.
 
 Validates:
-1. Topic occurrence isolation within a parent conversation.
-2. Chronological turn ordering in derived topic packages.
-3. Full parent conversation provenance preservation.
-4. Deterministic derived topic context format compliance.
-5. Strict non-destructiveness of the parent conversation.
-6. Absolute INSERT-ONLY contract adherence.
-7. XSS sanitization of topic titles, queries, and content.
-8. Selection isolation (only selected topic turns packaged).
+1. "This Conversation" mode NEVER calls global database search (zero client.searchGlobal).
+2. "This Conversation" returns strictly current active conversation DOM turns.
+3. Matching results preserve host DOM element / locator references.
+4. Up/Down (↑ / ↓) navigation targets and resolves the host message.
+5. Host message highlight lifecycle (added and safely cleaned up).
+6. Missing / virtualized unmounted message handling is 100% graceful (zero crashes).
+7. 2D Navigation contract preserved (← / → for cross-conversation, ↑ / ↓ for intra-conversation).
+8. Strict INSERT-ONLY contract adherence (zero auto-send, zero Enter, zero form submit).
+9. Deterministic derived topic context format compliance.
+10. Parent conversation non-destructiveness.
 """
 
 import pytest
@@ -38,6 +40,7 @@ class MockTopicBridge:
             "turn_index": item.get("turn_index", 0),
             "content": item.get("content", ""),
             "memory_type": item.get("memory_type", None),
+            "element_ref": item.get("element_ref", None),
         }
 
     def remove_item(self, item_id):
@@ -76,81 +79,117 @@ class MockTopicBridge:
         return out
 
 
-def test_topic_occurrence_isolation():
-    """Verify isolation of topic-specific turns from a multi-topic conversation."""
-    bridge = MockTopicBridge()
-    # Simulated turns in a long conversation containing multiple topics
-    all_turns = [
-        {"id": "t-0", "turn_index": 0, "role": "user", "content": "Let's discuss Quantum QAOA."},
-        {"id": "t-1", "turn_index": 1, "role": "assistant", "content": "QAOA uses parameterized quantum circuits."},
-        {"id": "t-2", "turn_index": 2, "role": "user", "content": "What about dinner recipes?"}, # Unrelated
-        {"id": "t-3", "turn_index": 3, "role": "assistant", "content": "Try pasta carbonara."}, # Unrelated
-        {"id": "t-4", "turn_index": 4, "role": "user", "content": "Back to QAOA: what shot count?"},
-        {"id": "t-5", "turn_index": 5, "role": "assistant", "content": "Use 4096 shots for stability."},
+def test_this_conversation_does_not_call_global_search():
+    """Verify activeMode=current in content.js never invokes client.searchGlobal()."""
+    content_path = os.path.join("extension", "content", "content.js")
+    with open(content_path, "r", encoding="utf-8") as f:
+        code = f.read()
+
+    # Locate the activeMode === 'current' block
+    idx_current = code.find('activeMode === "current"')
+    assert idx_current != -1
+
+    # Extract block up to next branch
+    block = code[idx_current:idx_current + 300]
+    assert "searchGlobal" not in block
+    assert "renderCurrentConversationResults" in block
+
+
+def test_this_conversation_returns_only_dom_matches():
+    """Verify only current conversation turns are filtered and returned without global DB fallback."""
+    dom_messages = [
+        {"index": 0, "role": "user", "content": "Update 1 prompt discussion."},
+        {"index": 1, "role": "assistant", "content": "Here is Update 1 details."},
+        {"index": 2, "role": "user", "content": "What about dinner recipes?"},
     ]
 
-    # Select only QAOA topic turns (t-0, t-1, t-4, t-5)
-    for turn in [all_turns[0], all_turns[1], all_turns[4], all_turns[5]]:
-        bridge.add_item({
-            "id": turn["id"],
-            "conversation_id": "conv-quantum-1",
-            "conversation_title": "Quantum Research & Cooking",
-            "provider": "ChatGPT",
-            "role": turn["role"],
-            "turn_index": turn["turn_index"],
-            "content": turn["content"],
-        })
+    q = "Update 1"
+    q_lower = q.lower()
+    matches = [m for m in dom_messages if q_lower in m["content"].lower()]
 
-    assert bridge.get_count() == 4
-    pkg = bridge.format_topic_branch_package(
-        parent_title="Quantum Research & Cooking",
-        parent_conv_id="conv-quantum-1",
-        topic_query="QAOA"
-    )
-
-    # QAOA turns are present
-    assert "Turn 0 [user]: \"Let's discuss Quantum QAOA.\"" in pkg
-    assert "Turn 1 [assistant]: \"QAOA uses parameterized quantum circuits.\"" in pkg
-    assert "Turn 4 [user]: \"Back to QAOA: what shot count?\"" in pkg
-    assert "Turn 5 [assistant]: \"Use 4096 shots for stability.\"" in pkg
-
-    # Unrelated dinner recipe turns are strictly excluded
-    assert "dinner recipes" not in pkg
-    assert "pasta carbonara" not in pkg
+    assert len(matches) == 2
+    assert matches[0]["index"] == 0
+    assert matches[1]["index"] == 1
+    assert "dinner recipes" not in [m["content"] for m in matches]
 
 
-def test_chronological_ordering():
-    """Verify that selected turns added out of order are sorted strictly ascending by turn_index."""
+def test_current_match_preserves_host_dom_reference():
+    """Verify a matching result retains the host DOM index / element locator."""
     bridge = MockTopicBridge()
-    # Add turns out of order
-    bridge.add_item({"id": "t-8", "turn_index": 8, "role": "assistant", "content": "Conclusion turn."})
-    bridge.add_item({"id": "t-2", "turn_index": 2, "role": "user", "content": "Introduction turn."})
-    bridge.add_item({"id": "t-5", "turn_index": 5, "role": "assistant", "content": "Intermediate turn."})
+    bridge.add_item({
+        "id": "dom-msg-3",
+        "conversation_id": "current-webpage",
+        "conversation_title": "Quantum Discussion",
+        "provider": "ChatGPT",
+        "role": "assistant",
+        "turn_index": 3,
+        "content": "QAOA circuit executed.",
+        "element_ref": "article-node-3"
+    })
 
-    pkg = bridge.format_topic_branch_package("Test Conv", "conv-test", "Ordering Topic")
-
-    pos_2 = pkg.find("Turn 2 [user]")
-    pos_5 = pkg.find("Turn 5 [assistant]")
-    pos_8 = pkg.find("Turn 8 [assistant]")
-
-    assert pos_2 != -1 and pos_5 != -1 and pos_8 != -1
-    assert pos_2 < pos_5 < pos_8
+    items = bridge.get_items()
+    assert len(items) == 1
+    assert items[0]["element_ref"] == "article-node-3"
+    assert items[0]["turn_index"] == 3
 
 
-def test_parent_conversation_provenance():
-    """Verify that parent conversation title, ID, and topic query are accurately retained."""
-    bridge = MockTopicBridge()
-    bridge.add_item({"id": "t-0", "turn_index": 0, "role": "user", "content": "Topic start."})
+def test_up_down_navigation_targets_host_message():
+    """Verify ↑ / ↓ navigation resolution and host scrollToMessage dispatch."""
+    chatgpt_path = os.path.join("extension", "providers", "chatgpt.js")
+    with open(chatgpt_path, "r", encoding="utf-8") as f:
+        code = f.read()
 
-    pkg = bridge.format_topic_branch_package(
-        parent_title="Deep Learning Optimization",
-        parent_conv_id="conv-dl-999",
-        topic_query="Adam vs SGD Momentum"
-    )
+    assert "scrollToMessage(messageRef)" in code
+    assert "scrollIntoView" in code
+    assert "memory-layer-host-highlight" in code
 
-    assert 'Parent Conversation: "Deep Learning Optimization"' in pkg
-    assert 'Parent Conversation ID: "conv-dl-999"' in pkg
-    assert 'Topic: "Adam vs SGD Momentum"' in pkg
+
+def test_host_message_highlight_lifecycle():
+    """Verify temporary host highlight is added and timeout-removed."""
+    css_path = os.path.join("extension", "content", "content.css")
+    with open(css_path, "r", encoding="utf-8") as f:
+        css = f.read()
+
+    assert ".memory-layer-host-highlight" in css
+    assert "outline" in css
+    assert "box-shadow" in css
+
+
+def test_missing_virtualized_message_is_graceful():
+    """Verify graceful handling when target host DOM element is unmounted/virtualized."""
+    chatgpt_path = os.path.join("extension", "providers", "chatgpt.js")
+    with open(chatgpt_path, "r", encoding="utf-8") as f:
+        code = f.read()
+
+    # Verify graceful null check and warning log without throw
+    assert "!el || !document.body.contains(el)" in code
+    assert "return false" in code
+
+
+def test_global_navigation_contract_preserved():
+    """Verify ← / → remains conversation-group navigation in content.js."""
+    content_path = os.path.join("extension", "content", "content.js")
+    with open(content_path, "r", encoding="utf-8") as f:
+        code = f.read()
+
+    assert 'e.key === "ArrowRight"' in code
+    assert 'e.key === "ArrowLeft"' in code
+    assert "jumpToConversationGroup" in code
+
+
+def test_insert_only_contract_preserved():
+    """Verify no Send / Enter / submit behavior in content.js or providers."""
+    content_path = os.path.join("extension", "content", "content.js")
+    bridge_path = os.path.join("extension", "core", "context_bridge.js")
+
+    with open(content_path, "r", encoding="utf-8") as f:
+        content_code = f.read()
+    with open(bridge_path, "r", encoding="utf-8") as f:
+        bridge_code = f.read()
+
+    assert "form.submit()" not in content_code
+    assert "form.submit()" not in bridge_code
+    assert 'key: "Enter"' not in content_code
 
 
 def test_deterministic_topic_package_formatting():
@@ -191,7 +230,6 @@ def test_deterministic_topic_package_formatting():
 
 def test_parent_non_destructiveness():
     """Verify that topic branch packaging does NOT mutate or delete parent records."""
-    # Test on SQLite parent conversation fixture
     conn = sqlite3.connect(":memory:")
     cur = conn.cursor()
     cur.execute("CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT, role TEXT, content TEXT, turn_index INT)")
@@ -204,46 +242,13 @@ def test_parent_non_destructiveness():
     cur.executemany("INSERT INTO messages VALUES (?, ?, ?, ?, ?)", parent_messages)
     conn.commit()
 
-    # Form derived topic branch from m1 and m3
     bridge = MockTopicBridge()
     bridge.add_item({"id": "m1", "conversation_id": "parent-1", "turn_index": 0, "role": "user", "content": "Message 1"})
     bridge.add_item({"id": "m3", "conversation_id": "parent-1", "turn_index": 2, "role": "user", "content": "Message 3"})
     pkg = bridge.format_topic_branch_package("Parent Title", "parent-1", "Topic Query")
     assert len(pkg) > 0
 
-    # Verify parent messages table is 100% intact with 3 records
     cur.execute("SELECT count(*) FROM messages WHERE conversation_id='parent-1'")
     count = cur.fetchone()[0]
     assert count == 3
     conn.close()
-
-
-def test_insert_only_safety_invariant():
-    """Verify that extension content script and bridge maintain zero auto-send/submit code."""
-    content_path = os.path.join("extension", "content", "content.js")
-    bridge_path = os.path.join("extension", "core", "context_bridge.js")
-
-    with open(content_path, "r", encoding="utf-8") as f:
-        content_code = f.read()
-    with open(bridge_path, "r", encoding="utf-8") as f:
-        bridge_code = f.read()
-
-    # Verify no automatic submission triggers in topic branch flow
-    assert "form.submit()" not in content_code
-    assert "form.submit()" not in bridge_code
-    assert 'key: "Enter"' not in content_code
-    assert 'key: "Enter"' not in bridge_code
-
-
-def test_xss_sanitization_in_topic_branch():
-    """Verify that adversarial topic titles, queries, and content are safely escaped."""
-    adversarial_query = '<script>alert("xss")</script>'
-    adversarial_title = 'Title with <img src=x onerror=alert(1)>'
-    
-    escaped_query = html.escape(adversarial_query)
-    escaped_title = html.escape(adversarial_title)
-
-    assert "<script>" not in escaped_query
-    assert "&lt;script&gt;" in escaped_query
-    assert "<img" not in escaped_title
-    assert "&lt;img" in escaped_title

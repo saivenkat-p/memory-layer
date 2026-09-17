@@ -1172,4 +1172,121 @@
   padding-top: 2px;
 }
 
+/* =========================================================================
+   INSIDE CONVERSATION WORKSPACE STYLES (V7.2)
+   ========================================================================= */
+
+.ml-inside-conv-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background-color: #1e293b;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  border: 1px solid #334155;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ml-inside-nav-tools, .ml-inside-bulk-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ml-tool-btn {
+  background-color: #334155;
+  color: #f1f5f9;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ml-tool-btn:hover {
+  background-color: #0284c7;
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+.ml-q-badge {
+  background: linear-gradient(135deg, #0284c7, #0369a1);
+  color: #ffffff;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.ml-question-card {
+  border-left: 3px solid #0284c7;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.ml-question-card.active-match {
+  border-left-color: #38bdf8;
+  background-color: rgba(2, 132, 199, 0.08);
+  box-shadow: 0 0 0 1px #0284c7;
+}
+
+.ml-question-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f8fafc;
+  line-height: 1.45;
+  margin-bottom: 6px;
+}
+
+.ml-accordion-toggle {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 4px 0;
+  text-decoration: underline;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ml-accordion-toggle:hover {
+  color: #38bdf8;
+}
+
+.ml-accordion-body {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background-color: #1e293b;
+  border-radius: 6px;
+  border-left: 2px solid #64748b;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.ml-accordion-body.hidden {
+  display: none !important;
+}
+
+.ml-accordion-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+.ml-surrounding-item {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed #334155;
+}
+
+
 

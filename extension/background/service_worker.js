@@ -12,3 +12,20 @@ chrome.runtime.onInstalled.addListener(() => {
     }
   });
 });
+
+// Proxy HTTP requests to localhost backend (bypasses page-level Private Network Access / CSP restrictions)
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request && request.type === "API_REQUEST") {
+    const { url, options } = request;
+    fetch(url, options)
+      .then(async (resp) => {
+        const data = await resp.json().catch(() => ({}));
+        sendResponse({ ok: resp.ok, status: resp.status, data });
+      })
+      .catch((err) => {
+        console.warn("[ServiceWorker] API proxy fetch offline/failed:", err.message);
+        sendResponse({ ok: false, error: err.message, offline: true });
+      });
+    return true; // Keep message channel open for async response
+  }
+});

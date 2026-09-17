@@ -229,6 +229,7 @@
     let currentCardIndex = -1;
     let currentConversationIndex = -1;
     let distinctConversationIds = [];
+    let currentRawItemsMap = new Map();
 
     // DOM Elements
     const tabMemories = document.getElementById("tab-memories");
@@ -267,8 +268,8 @@
       setActiveTab(tabAll);
       categoryBar.style.display = "none";
       banner.style.display = "block";
-      banner.innerHTML = `🌐 <strong>Global Raw Message Mode:</strong> Searching raw multi-turn conversation messages across entire database.`;
-      searchInput.placeholder = "Search raw conversation transcripts...";
+      banner.innerHTML = `💬 <strong>Global Raw Message Mode:</strong> Searching raw multi-turn conversation messages across entire database.`;
+      searchInput.placeholder = "Search all conversation history across all providers...";
       executeSearch();
     });
 
@@ -277,7 +278,7 @@
       setActiveTab(tabCurr);
       categoryBar.style.display = "none";
       banner.style.display = "block";
-      banner.innerHTML = `📌 <strong>Current Conversation Mode:</strong> Searching messages in <em>"${escapeHtml(currentAdapter.getCurrentConversationTitle())}"</em>.`;
+      banner.innerHTML = `📌 <strong>Current Conversation Mode:</strong> Searching indexed messages in <em>"${escapeHtml(currentAdapter.getCurrentConversationTitle())}"</em>.`;
       searchInput.placeholder = "Search messages in this active chat...";
       executeSearch();
     });
@@ -350,6 +351,13 @@
         const target = cards[index];
         target.classList.add("keyboard-focused");
         target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+        if (activeMode === "current") {
+          const msgId = target.getAttribute("data-msg-id");
+          if (msgId && currentRawItemsMap.has(msgId)) {
+            currentAdapter.scrollToMessage(currentRawItemsMap.get(msgId));
+          }
+        }
       }
     }
 
@@ -370,6 +378,7 @@
       currentCardIndex = -1;
       currentConversationIndex = -1;
       distinctConversationIds = [];
+      currentRawItemsMap.clear();
 
       resultsContainer.innerHTML = `<div class="memory-layer-placeholder">Searching Memory Layer backend...</div>`;
 
@@ -388,9 +397,24 @@
         }
         renderStructuredMemoryResults(res, q);
       } else if (activeMode === "current") {
-        // In-Conversation Search Mode: STRICTLY CURRENT CONVERSATION DOM ONLY
-        const domMsgs = currentAdapter.readVisibleMessages();
-        renderCurrentConversationResults(domMsgs, q);
+        // In-Conversation Search Mode: Complete Indexed Conversation Backend Search
+        const convId = currentAdapter.getCurrentConversationId ? currentAdapter.getCurrentConversationId() : null;
+        if (!convId) {
+          resultsContainer.innerHTML = `<div class="memory-layer-placeholder">No active conversation ID detected in current URL. Open a saved chat to search its history.</div>`;
+          return;
+        }
+
+        let res = await client.searchInConversation(convId, q || "", 30);
+        // Fallback: If not found under canonical ID, check if stored with provider prefix (e.g. chatgpt-<uuid>)
+        if ((!res || !res.results || !res.results.length) && !res.offline && !convId.startsWith(`${currentAdapter.getProviderName().toLowerCase()}-`)) {
+          const fallbackId = `${currentAdapter.getProviderName().toLowerCase()}-${convId}`;
+          const fallbackRes = await client.searchInConversation(fallbackId, q || "", 30);
+          if (fallbackRes && fallbackRes.results && fallbackRes.results.length) {
+            res = fallbackRes;
+          }
+        }
+
+        renderCurrentConversationResults(res, convId, q);
       } else {
         // Global Raw Messages Mode: CHAT-CENTRIC GROUPING
         const res = await client.searchGlobal(q || "", 30);
@@ -524,46 +548,130 @@
       }).join("");
     }
 
-    function renderCurrentConversationResults(domMessages, queryText) {
-      const qLower = (queryText || "").toLowerCase();
-      const domMatches = (domMessages || []).filter((m) => !qLower || (m.content && m.content.toLowerCase().includes(qLower)));
+    function renderCurrentConversationResults(apiResponse, conversationId, queryText) {
+      if (apiResponse && apiResponse.offline) {
+        renderOfflineNotice();
+        return;
+      }
 
-      if (!domMatches.length) {
-        resultsContainer.innerHTML = `<div class="memory-layer-placeholder">No matching messages found in this conversation for "${escapeHtml(queryText)}".</div>`;
+      const results = (apiResponse && apiResponse.results) ? apiResponse.results : [];
+      if (!results.length) {
+        if (!queryText) {
+          resultsContainer.innerHTML = `<div class="memory-layer-placeholder">Conversation not indexed in Memory Layer yet.</div>`;
+        } else {
+          resultsContainer.innerHTML = `<div class="memory-layer-placeholder">No matching questions found in this conversation for "${escapeHtml(queryText)}".</div>`;
+        }
         return;
       }
 
       distinctConversationIds = [];
-      const rawItemsMap = new Map();
-      let html = `<div class="results-section-header">📄 Visible Webpage Messages (${domMatches.length} match${domMatches.length === 1 ? "" : "es"})</div>`;
+      currentRawItemsMap.clear();
 
-      domMatches.forEach((m, idx) => {
-        const domId = `dom-msg-${m.index !== undefined ? m.index : idx}`;
-        rawItemsMap.set(domId, {
-          id: domId,
-          conversationId: "current-webpage",
-          conversationTitle: currentAdapter.getCurrentConversationTitle(),
-          provider: currentAdapter.getProviderName(),
-          role: m.role || "user",
-          turnIndex: m.index !== undefined ? m.index : idx,
-          content: m.content || "",
-          element: m.element || null
+      // Top Toolbar: Quick Navigation (Top/Bottom) and Bulk Selection (Select All / Deselect All)
+      let html = `
+        <div class="ml-inside-conv-toolbar">
+          <div class="ml-inside-nav-tools">
+            <span style="font-size: 11px; font-weight: 700; color: #38bdf8;">📍 ${escapeHtml(queryText || "All")} — ${results.length} matching question${results.length === 1 ? "" : "s"}</span>
+            <button type="button" class="ml-tool-btn" id="ml-btn-jump-top" title="Jump to Top / First Question (Q1)">⬆️ Top (Q1)</button>
+            <button type="button" class="ml-tool-btn" id="ml-btn-jump-bottom" title="Jump to Bottom / Latest Turn">⬇️ Bottom</button>
+          </div>
+          <div class="ml-inside-bulk-tools">
+            <button type="button" class="ml-tool-btn" id="ml-btn-select-all-matches">Select All Matches</button>
+            <button type="button" class="ml-tool-btn" id="ml-btn-deselect-all">Deselect All</button>
+          </div>
+        </div>
+      `;
+
+      results.forEach((r, idx) => {
+        const msgId = r.message_id || `conv-msg-${idx}`;
+        const turnIdx = r.msg_index !== undefined ? r.msg_index : idx;
+        const role = r.matched_role || "user";
+        
+        // Stable sequential Question Numbering (Section 4 & 5)
+        // User turn 0 -> Q1, turn 2 -> Q2, turn 4 -> Q3...
+        // Assistant turn 1 -> Q1a, turn 3 -> Q2a, turn 5 -> Q3a...
+        const qNum = r.question_number !== undefined ? r.question_number : Math.max(1, Math.floor(turnIdx / 2) + 1);
+        const turnLabel = r.turn_label || (role === "user" ? `${qNum}` : `${qNum}a`);
+        
+        const scoreStr = r.score ? `${Math.round(r.score * 100)}% match` : "";
+        const contentText = r.matched_content || r.snippet || "";
+        const questionTitleText = r.parent_question_text || (role === "user" ? contentText : `Question #${qNum}`);
+        const contextList = r.context_messages || [];
+
+        currentRawItemsMap.set(msgId, {
+          id: msgId,
+          conversationId: r.conversation_id || conversationId,
+          conversationTitle: r.conversation_title || currentAdapter.getCurrentConversationTitle(),
+          provider: r.source || currentAdapter.getProviderName(),
+          role: role,
+          turnIndex: turnIdx,
+          questionNumber: qNum,
+          turnLabel: turnLabel,
+          content: contentText,
+          snippet: r.snippet || contentText,
+          score: r.score || 0
         });
 
-        const isChecked = bridge.hasItem(domId);
+        const isChecked = bridge.hasItem(msgId);
         html += `
-          <div class="memory-card dom-card" data-conv-id="current-page" data-dom-index="${m.index !== undefined ? m.index : idx}">
+          <div class="memory-card dom-card ml-question-card" data-msg-id="${escapeAttr(msgId)}" data-turn-index="${turnIdx}" data-card-index="${idx}">
             <div class="card-meta">
-              <span class="role-badge ${m.role}">${m.role}</span>
-              <span class="source-badge">Turn ${m.index !== undefined ? m.index : idx}</span>
+              <span class="ml-q-badge">Question #${qNum}</span>
+              <span class="role-badge ${role}">${role === "user" ? "User Question" : "Answer " + turnLabel}</span>
+              <span class="source-badge">Turn ${turnIdx}</span>
+              ${scoreStr ? `<span class="score-badge">${scoreStr}</span>` : ""}
             </div>
-            <div class="card-content">${escapeHtml(m.content.slice(0, 300))}${m.content.length > 300 ? "..." : ""}</div>
+            <div class="ml-question-text">${escapeHtml(role === "user" ? contentText : questionTitleText)}</div>
+            
+            <!-- Collapsible Assistant Answer & Surrounding Context Accordion (Sections 3 & 14) -->
+            <button type="button" class="ml-accordion-toggle" data-target="acc-${idx}">
+              👁️ View Answer #${qNum}a & Surrounding Context ▾
+            </button>
+            <div class="ml-accordion-body hidden" id="acc-${idx}">
+              <div class="ml-accordion-meta">
+                <strong>Turn ${turnLabel} Content:</strong>
+              </div>
+              <div class="ml-turn-text">${escapeHtml(contentText)}</div>
+              ${contextList.length ? `
+                <div class="ml-accordion-meta" style="margin-top: 8px;"><strong>Surrounding Conversation Turns:</strong></div>
+                ${contextList.map((cm, cIdx) => {
+                  const cmId = cm.id || `${msgId}-ctx-${cIdx}`;
+                  if (!currentRawItemsMap.has(cmId)) {
+                    currentRawItemsMap.set(cmId, {
+                      id: cmId,
+                      conversationId: r.conversation_id || conversationId,
+                      conversationTitle: r.conversation_title || currentAdapter.getCurrentConversationTitle(),
+                      provider: r.source || currentAdapter.getProviderName(),
+                      role: cm.role || "assistant",
+                      turnIndex: cm.index !== undefined ? cm.index : turnIdx,
+                      content: cm.content || "",
+                      snippet: cm.content || "",
+                      score: 0
+                    });
+                  }
+                  return `
+                    <div class="ml-surrounding-item">
+                      <div class="ml-accordion-meta">
+                        <span>${escapeHtml(cm.role || "assistant")} (Turn ${cm.index !== undefined ? cm.index : ""})</span>
+                        <label class="select-label" style="font-size: 10px;">
+                          <input type="checkbox" class="raw-select-checkbox" data-id="${escapeAttr(cmId)}" ${bridge.hasItem(cmId) ? "checked" : ""}>
+                          <span>Select context</span>
+                        </label>
+                      </div>
+                      <div style="font-size: 11px; color: #94a3b8;">${escapeHtml((cm.content || "").slice(0, 200))}${(cm.content || "").length > 200 ? "..." : ""}</div>
+                    </div>
+                  `;
+                }).join("")}
+              ` : ""}
+            </div>
+
             <div class="card-actions">
               <label class="select-label">
-                <input type="checkbox" class="raw-select-checkbox" data-id="${escapeAttr(domId)}" ${isChecked ? "checked" : ""}>
-                <span>Select</span>
+                <input type="checkbox" class="raw-select-checkbox" data-id="${escapeAttr(msgId)}" ${isChecked ? "checked" : ""}>
+                <span>Select Question #${qNum}</span>
               </label>
-              <button type="button" class="insert-btn raw-insert-btn" data-id="${escapeAttr(domId)}">📥 Insert into Prompt</button>
+              <button type="button" class="insert-btn raw-insert-btn" data-id="${escapeAttr(msgId)}">📥 Insert into Prompt</button>
+              <button type="button" class="jump-btn ml-jump-to-msg-btn" data-id="${escapeAttr(msgId)}">🎯 Jump to Question #${qNum}</button>
             </div>
           </div>
         `;
@@ -571,11 +679,74 @@
 
       resultsContainer.innerHTML = html;
 
-      // Event bindings
+      // Event bindings: Toolbar Jump Top & Bottom
+      const btnTop = document.getElementById("ml-btn-jump-top");
+      if (btnTop) {
+        btnTop.addEventListener("click", () => {
+          if (results.length) {
+            const firstItem = currentRawItemsMap.get(results[0].message_id);
+            if (firstItem) currentAdapter.scrollToMessage(firstItem);
+          }
+        });
+      }
+
+      const btnBottom = document.getElementById("ml-btn-jump-bottom");
+      if (btnBottom) {
+        btnBottom.addEventListener("click", () => {
+          if (results.length) {
+            const lastItem = currentRawItemsMap.get(results[results.length - 1].message_id);
+            if (lastItem) currentAdapter.scrollToMessage(lastItem);
+          }
+        });
+      }
+
+      // Event bindings: Bulk Selection (Select All / Deselect All)
+      const btnSelectAll = document.getElementById("ml-btn-select-all-matches");
+      if (btnSelectAll) {
+        btnSelectAll.addEventListener("click", () => {
+          results.forEach(r => {
+            const item = currentRawItemsMap.get(r.message_id);
+            if (item) bridge.addItem(item);
+          });
+          resultsContainer.querySelectorAll("input.raw-select-checkbox").forEach(cb => {
+            const id = cb.getAttribute("data-id");
+            if (currentRawItemsMap.has(id)) cb.checked = true;
+          });
+          updateSelectionFooter();
+        });
+      }
+
+      const btnDeselectAll = document.getElementById("ml-btn-deselect-all");
+      if (btnDeselectAll) {
+        btnDeselectAll.addEventListener("click", () => {
+          results.forEach(r => {
+            bridge.removeItem(r.message_id);
+          });
+          resultsContainer.querySelectorAll("input.raw-select-checkbox").forEach(cb => { cb.checked = false; });
+          updateSelectionFooter();
+        });
+      }
+
+      // Accordion toggle
+      resultsContainer.querySelectorAll(".ml-accordion-toggle").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const targetId = btn.getAttribute("data-target");
+          const body = document.getElementById(targetId);
+          if (body) {
+            body.classList.toggle("hidden");
+            btn.textContent = body.classList.contains("hidden") 
+              ? `👁️ View Answer & Surrounding Context ▾` 
+              : `🙈 Hide Answer & Context ▴`;
+          }
+        });
+      });
+
+      // Event bindings: Selection Checkboxes
       resultsContainer.querySelectorAll(".raw-select-checkbox").forEach((cb) => {
         cb.addEventListener("change", (e) => {
           const id = e.target.getAttribute("data-id");
-          const item = rawItemsMap.get(id);
+          const item = currentRawItemsMap.get(id);
           if (e.target.checked && item) {
             bridge.addItem(item);
           } else {
@@ -585,14 +756,44 @@
         });
       });
 
+      // Event bindings: Prompt Insertion (INSERT != SEND)
       resultsContainer.querySelectorAll(".raw-insert-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
           const id = btn.getAttribute("data-id");
-          const item = rawItemsMap.get(id);
+          const item = currentRawItemsMap.get(id);
           if (item) {
-            const formatted = `[Memory Layer Reference — Turn ${item.turnIndex} (${item.role})]:\n"${item.content}"\n\n`;
+            const formatted = `[Memory Layer Reference — Question #${item.questionNumber || item.turnIndex} (${item.role})]:\n"${item.content}"\n\n`;
             const inserted = currentAdapter.insertText(formatted);
             handleInsertFeedback(btn, inserted);
+          }
+        });
+      });
+
+      // Event bindings: Jump to Question
+      resultsContainer.querySelectorAll(".ml-jump-to-msg-btn").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const id = btn.getAttribute("data-id");
+          const item = currentRawItemsMap.get(id);
+          if (item) {
+            const scrolled = currentAdapter.scrollToMessage(item);
+            if (!scrolled) {
+              btn.textContent = "⚠️ Off-screen (Virtual)";
+              setTimeout(() => { btn.textContent = `🎯 Jump to Question #${item.questionNumber || item.turnIndex}`; }, 1800);
+            }
+          }
+        });
+      });
+
+      // Clicking the card itself scrolls to the message in host DOM
+      resultsContainer.querySelectorAll(".dom-card").forEach((card) => {
+        card.addEventListener("click", (e) => {
+          if (e.target.closest("button") || e.target.closest("input") || e.target.closest("label") || e.target.closest(".ml-accordion-body")) return;
+          const id = card.getAttribute("data-msg-id");
+          const item = currentRawItemsMap.get(id);
+          if (item) {
+            currentAdapter.scrollToMessage(item);
           }
         });
       });

@@ -14,18 +14,47 @@ class MemoryLayerClient {
   }
 
   async _fetchWithTimeout(url, options = {}, timeoutMs = this.DEFAULT_TIMEOUT_MS) {
+    // 1. Attempt direct fetch
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const resp = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(timer);
       return resp;
-    } catch (e) {
+    } catch (directErr) {
       clearTimeout(timer);
-      if (e.name === "AbortError") {
+
+      // 2. Fallback: Proxy via extension service worker (bypasses Chrome page-level Private Network Access restrictions)
+      if (typeof chrome !== "undefined" && chrome.runtime && typeof chrome.runtime.sendMessage === "function") {
+        try {
+          const bgResp = await new Promise((resolve) => {
+            const bgTimer = setTimeout(() => resolve({ ok: false, offline: true, error: "Background proxy timeout" }), timeoutMs);
+            chrome.runtime.sendMessage({ type: "API_REQUEST", url, options }, (response) => {
+              clearTimeout(bgTimer);
+              if (chrome.runtime && chrome.runtime.lastError) {
+                resolve({ ok: false, offline: true, error: chrome.runtime.lastError.message });
+              } else {
+                resolve(response || { ok: false, offline: true });
+              }
+            });
+          });
+
+          if (bgResp && bgResp.data !== undefined) {
+            return {
+              ok: bgResp.ok,
+              status: bgResp.status || (bgResp.ok ? 200 : 500),
+              json: async () => bgResp.data
+            };
+          }
+        } catch (bgErr) {
+          // Fall through
+        }
+      }
+
+      if (directErr.name === "AbortError") {
         throw new Error(`Request timed out after ${timeoutMs}ms`);
       }
-      throw e;
+      throw directErr;
     }
   }
 
@@ -49,7 +78,7 @@ class MemoryLayerClient {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return await resp.json();
     } catch (e) {
-      console.error("[MemoryLayerClient] Global search failed:", e);
+      console.warn("[MemoryLayerClient] Global search offline/failed:", e.message);
       return { error: true, message: e.message, results: [], offline: true };
     }
   }
@@ -64,7 +93,7 @@ class MemoryLayerClient {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return await resp.json();
     } catch (e) {
-      console.error("[MemoryLayerClient] In-conversation search failed:", e);
+      console.warn("[MemoryLayerClient] In-conversation search offline/failed:", e.message);
       return { error: true, message: e.message, results: [], offline: true };
     }
   }
@@ -79,7 +108,7 @@ class MemoryLayerClient {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return await resp.json();
     } catch (e) {
-      console.error("[MemoryLayerClient] Context composition failed:", e);
+      console.warn("[MemoryLayerClient] Context composition offline/failed:", e.message);
       return { error: true, message: e.message, offline: true };
     }
   }
@@ -94,7 +123,27 @@ class MemoryLayerClient {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return await resp.json();
     } catch (e) {
-      console.error("[MemoryLayerClient] Conversation sync failed:", e);
+      console.warn("[MemoryLayerClient] Conversation sync offline/failed:", e.message);
+      return { error: true, message: e.message, offline: true };
+    }
+  }
+
+  async createChildConversation(parentConversationId, title, sourceMessageIds = [], provider = "ChatGPT") {
+    try {
+      const resp = await this._fetchWithTimeout(`${this.baseUrl}/conversations/child`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          parent_conversation_id: parentConversationId,
+          title: title,
+          source_message_ids: sourceMessageIds,
+          provider: provider
+        })
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return await resp.json();
+    } catch (e) {
+      console.warn("[MemoryLayerClient] Create child conversation offline/failed:", e.message);
       return { error: true, message: e.message, offline: true };
     }
   }
@@ -119,7 +168,7 @@ class MemoryLayerClient {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return await resp.json();
     } catch (e) {
-      console.error("[MemoryLayerClient] List memories failed:", e);
+      console.warn("[MemoryLayerClient] List memories offline/failed:", e.message);
       return { error: true, message: e.message, memories: [], total: 0, offline: true };
     }
   }
@@ -144,7 +193,7 @@ class MemoryLayerClient {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return await resp.json();
     } catch (e) {
-      console.error("[MemoryLayerClient] Search memories failed:", e);
+      console.warn("[MemoryLayerClient] Search memories offline/failed:", e.message);
       return { error: true, message: e.message, results: [], total: 0, offline: true };
     }
   }
@@ -156,7 +205,7 @@ class MemoryLayerClient {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return await resp.json();
     } catch (e) {
-      console.error("[MemoryLayerClient] Get memory failed:", e);
+      console.warn("[MemoryLayerClient] Get memory offline/failed:", e.message);
       return { error: true, message: e.message, not_found: true, offline: true };
     }
   }
@@ -168,7 +217,7 @@ class MemoryLayerClient {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return await resp.json();
     } catch (e) {
-      console.error("[MemoryLayerClient] Delete memory failed:", e);
+      console.warn("[MemoryLayerClient] Delete memory offline/failed:", e.message);
       return { error: true, message: e.message, offline: true };
     }
   }

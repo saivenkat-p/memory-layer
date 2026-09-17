@@ -117,6 +117,33 @@ class FindHereEngine:
             if score > max_kw_score:
                 max_kw_score = score
 
+        # Build sequential question numbering map (1, 1a, 2, 2a, 3, 3a...)
+        q_counter = 0
+        current_user_msg = None
+        assistant_counts: Dict[int, int] = {}
+        msg_q_map: Dict[str, Dict[str, Any]] = {}
+
+        for msg in conv.messages:
+            if msg.role.lower() == "user":
+                q_counter += 1
+                current_user_msg = msg
+                assistant_counts[q_counter] = 0
+                msg_q_map[msg.id] = {
+                    "question_number": q_counter,
+                    "turn_label": str(q_counter),
+                    "parent_question_text": msg.content,
+                }
+            else:
+                q_num = q_counter if q_counter > 0 else 1
+                a_count = assistant_counts.get(q_num, 0)
+                suffix = chr(ord('a') + a_count) if a_count < 26 else f"a{a_count}"
+                assistant_counts[q_num] = a_count + 1
+                msg_q_map[msg.id] = {
+                    "question_number": q_num,
+                    "turn_label": f"{q_num}{suffix}",
+                    "parent_question_text": current_user_msg.content if current_user_msg else "Initial Context",
+                }
+
         for msg in conv.messages:
             kw_raw = kw_scores.get(msg.id, 0)
             kw_norm = kw_raw / float(max_kw_score) if max_kw_score > 0 else 0.0
@@ -138,6 +165,7 @@ class FindHereEngine:
             if final_score >= self.min_relevance_threshold or kw_raw > 0:
                 # Helper snippet generation
                 snippet = self._generate_snippet(msg.content, keywords)
+                q_info = msg_q_map.get(msg.id, {})
                 results.append(
                     SearchResult(
                         message_id=msg.id,
@@ -152,6 +180,9 @@ class FindHereEngine:
                         category=conv.category,
                         tags=conv.tags,
                         score=int(round(final_score * 100)),
+                        question_number=q_info.get("question_number"),
+                        turn_label=q_info.get("turn_label"),
+                        parent_question_text=q_info.get("parent_question_text"),
                     )
                 )
 

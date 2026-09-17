@@ -80,6 +80,7 @@ class MemoryLayerHTTPRequestHandler(BaseHTTPRequestHandler):
 
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Memory-Layer-Key")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
 
     def _send_json_response(self, status_code: int, data: Dict[str, Any]):
         body_bytes = json.dumps(data, indent=2).encode("utf-8")
@@ -373,6 +374,56 @@ class MemoryLayerHTTPRequestHandler(BaseHTTPRequestHandler):
                     "success": True,
                     "conversation_id": saved_id,
                     "messages_synced": len(messages)
+                })
+
+            elif path == "/api/v1/conversations/child":
+                parent_id = body.get("parent_conversation_id", "").strip()
+                title = body.get("title", "").strip() or "Derived Child Topic"
+                source_msg_ids = body.get("source_message_ids", [])
+                provider = body.get("provider", "ChatGPT").strip()
+
+                if not parent_id:
+                    self._send_error_response(400, "Field 'parent_conversation_id' is required.", "INVALID_INPUT")
+                    return
+
+                parent_conv = self.repo.get_conversation(parent_id)
+                if not parent_conv:
+                    self._send_error_response(404, f"Parent conversation '{parent_id}' not found.", "NOT_FOUND")
+                    return
+
+                # Filter parent messages by source_msg_ids (preserving order and provenance)
+                child_msgs = []
+                if source_msg_ids:
+                    id_set = set(source_msg_ids)
+                    for m in parent_conv.messages:
+                        if m.id in id_set:
+                            child_msgs.append(Message(
+                                id=f"child_{m.id}",
+                                role=m.role,
+                                content=m.content,
+                                index=len(child_msgs)
+                            ))
+                else:
+                    child_msgs = [Message(id=f"child_{m.id}", role=m.role, content=m.content, index=i) for i, m in enumerate(parent_conv.messages)]
+
+                import uuid
+                child_id = str(uuid.uuid4())
+                child_conv = Conversation(
+                    id=child_id,
+                    title=f"[Child] {title}",
+                    source=provider or parent_conv.source,
+                    messages=child_msgs,
+                    tags=list(set((parent_conv.tags or []) + ["child_topic", f"parent:{parent_id}"])),
+                    description=f"Derived from parent conversation {parent_id}"
+                )
+                self.repo.save_conversation(child_conv)
+                self._send_json_response(200, {
+                    "success": True,
+                    "child_conversation_id": child_id,
+                    "parent_conversation_id": parent_id,
+                    "title": child_conv.title,
+                    "message_count": len(child_msgs),
+                    "parent_message_count": len(parent_conv.messages)
                 })
 
             elif path == "/api/v1/memories/search":

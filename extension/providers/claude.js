@@ -22,6 +22,15 @@ class ClaudeAdapter extends BaseProviderAdapter {
     return "Claude Conversation";
   }
 
+  getCurrentConversationId() {
+    const path = window.location.pathname;
+    const match = path.match(/\/chat\/([a-f0-9-]+)/i);
+    if (match) {
+      return match[1];
+    }
+    return null;
+  }
+
   getComposer() {
     // Basic selector candidate for claude.ai
     return document.querySelector('div[contenteditable="true"], textarea');

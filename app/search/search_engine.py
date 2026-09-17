@@ -40,6 +40,9 @@ class SearchResult:
     score: int = 1
     context_messages: List[Dict[str, Any]] = field(default_factory=list)
     context_text: str = ""
+    question_number: Optional[int] = None
+    turn_label: Optional[str] = None
+    parent_question_text: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -57,6 +60,9 @@ class SearchResult:
             "score": self.score,
             "context_messages": self.context_messages,
             "context_text": self.context_text,
+            "question_number": self.question_number,
+            "turn_label": self.turn_label,
+            "parent_question_text": self.parent_question_text,
         }
 
 

@@ -135,17 +135,24 @@ class ConversationSyncEngine {
   }
 
   deriveConversationId(provider) {
+    if (this.currentAdapter && typeof this.currentAdapter.getCurrentConversationId === "function") {
+      const canonicalId = this.currentAdapter.getCurrentConversationId();
+      if (canonicalId) {
+        return canonicalId;
+      }
+    }
+
     const path = window.location.pathname;
     // Extract ChatGPT URL ID if available (e.g. /c/67a2f...)
     const chatgptMatch = path.match(/\/c\/([a-zA-Z0-9-]+)/);
     if (chatgptMatch) {
-      return `chatgpt-${chatgptMatch[1]}`;
+      return chatgptMatch[1];
     }
 
     // Extract Gemini URL ID if available (e.g. /app/<id>)
     const geminiMatch = path.match(/\/app\/([a-zA-Z0-9-]+)/);
     if (geminiMatch) {
-      return `gemini-${geminiMatch[1]}`;
+      return geminiMatch[1];
     }
 
     // Fallback: Title & hostname hash

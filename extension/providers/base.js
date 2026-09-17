@@ -24,6 +24,10 @@ class BaseProviderAdapter {
     return "Unknown Conversation";
   }
 
+  getCurrentConversationId() {
+    return null;
+  }
+
   getComposer() {
     return null;
   }

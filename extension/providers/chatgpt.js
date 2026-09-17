@@ -44,6 +44,15 @@ class ChatGPTAdapter extends BaseProviderAdapter {
     return "ChatGPT Conversation";
   }
 
+  getCurrentConversationId() {
+    const path = window.location.pathname;
+    const match = path.match(/\/c\/([a-f0-9-]+)/i);
+    if (match) {
+      return match[1];
+    }
+    return null;
+  }
+
   getComposer() {
     // Fallback Selector Strategy (Directive 7: Do not rely on one fragile selector)
     const selectors = [

@@ -349,16 +349,15 @@ def test_16_insert_not_send_remains_enforced():
 
 
 def test_17_this_conversation_mode_never_calls_global_search():
-    """Test 17: This Conversation mode searches DOM visible messages and does not invoke client.searchGlobal."""
+    """Test 17: This Conversation mode searches complete indexed conversation via searchInConversation and does not invoke client.searchGlobal."""
     with open(os.path.join("extension", "content", "content.js"), "r", encoding="utf-8") as f:
         content_js = f.read()
 
-    # In executeSearch when activeMode === 'current', it reads DOM messages directly
-    match = re.search(r"if\s*\(\s*activeMode\s*===\s*[\"']current[\"']\s*\)[\s\S]*?(?=else\s*if|\}\s*else)", content_js)
+    match = re.search(r"else\s+if\s*\(\s*activeMode\s*===\s*[\"']current[\"']\s*\)[\s\S]*?(?=else\s*\{)", content_js)
     assert match is not None
     current_mode_block = match.group(0)
 
-    assert "readVisibleMessages" in current_mode_block
+    assert "searchInConversation" in current_mode_block
     assert "searchGlobal" not in current_mode_block
 
 

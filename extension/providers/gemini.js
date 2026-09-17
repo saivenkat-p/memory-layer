@@ -57,6 +57,15 @@ class GeminiAdapter extends BaseProviderAdapter {
     return "Gemini Conversation";
   }
 
+  getCurrentConversationId() {
+    const path = window.location.pathname;
+    const match = path.match(/\/app\/([a-zA-Z0-9-]+)/);
+    if (match) {
+      return match[1];
+    }
+    return null;
+  }
+
   getComposer() {
     // Fallback Selector Strategy for Gemini DOM (rich-textarea, Quill editor, contenteditable, textarea)
     const selectors = [

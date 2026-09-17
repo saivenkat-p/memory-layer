@@ -85,12 +85,12 @@ def test_this_conversation_does_not_call_global_search():
     with open(content_path, "r", encoding="utf-8") as f:
         code = f.read()
 
-    # Locate the activeMode === 'current' block
-    idx_current = code.find('activeMode === "current"')
+    # Locate the activeMode === 'current' block in executeSearch
+    idx_current = code.find('else if (activeMode === "current")')
     assert idx_current != -1
 
     # Extract block up to next branch
-    block = code[idx_current:idx_current + 300]
+    block = code[idx_current:idx_current + 1200]
     assert "searchGlobal" not in block
     assert "renderCurrentConversationResults" in block
 
